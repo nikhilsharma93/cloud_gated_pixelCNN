@@ -207,7 +207,33 @@ function createModel(noChannels, noFeatures, noLayers, noClasses,
                          true)
         - layers
 
-    local model = nn.gModule({input}, {output})
+    --Now the output layer
+    local outputLayer = nn.Sequential()
+        outputLayer:add(nn.SelectTable(2)) --Select the horizontal stack out
+        -- Followed by 2 layers of (ReLU + 1*1 conv of mask B)
+        outputLayer:add(nn.ReLU())
+        outputLayer:add(nn.SpatialConvolution_masked(noFeatures, noFeatures, 1,1,
+                        1,1,0,0, maskChannels, noChannels))
+        outputLayer:add(nn.ReLU())
+        outputLayer:add(nn.SpatialConvolution_masked(noFeatures, noClasses*noChannels,
+                        1,1,1,1,0,0, maskChannels, noChannels))
+
+
+    --Final SoftMax / Sigmoid layer
+    -- After the previous layer, the 4D output is
+    -- BatchSize * (noChannels*noClasses) * N * N
+    -- Break it into chunks of size "BatchSize*noChannels*N*N"
+    -- LogSoftMax by itself will do the spatial log softmax on each chunk
+    local convertToProb = nn.Sequential()
+        convertToProb:add(nn.LogSoftMax())
+
+
+
+
+    local finalOutput = output
+        - outputLayer
+
+    local model = nn.gModule({input}, {finalOutput})
     return model
 end
 
