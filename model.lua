@@ -6,7 +6,7 @@ require 'torch'
 require 'nn'
 require 'nngraph'
 require 'math'
-require 'SpatialConvolutionMM_masked'
+require 'SpatialConvolution_masked'
 
 local function gatedActivationUnit(n_op)
     -- Define the gated activations
@@ -44,14 +44,59 @@ local function fuse(n_op, factor)
 end
 
 
+local function maskChannels(weights, n_ip, n_op, kW, noChannels)
+    -- There are 2*n_op features that come out of the conv layer
+    -- Mask them individually
+    local n_op = n_op/2
+    for loopChannels = 1, noChannels-1 do
+
+        ---------------
+        --Mask the first n_op features
+        ---------------
+
+        -- Select indices corresponding to op features
+        local maskStartOp = 1 + (loopChannels-1)*(n_op/noChannels)
+        local maskEndOp = loopChannels*(n_op/noChannels)
+
+        -- Select the indices corresponding to ip channels
+        local maskStartIp = loopChannels+1
+        local maskEndIp = noChannels
+
+        -- Select the position of the ith pixel in the kernel
+        local pixelPos = kW
 
 
-local function gatedPixelUnit(n_ip, n_op, filtSize, isFirstLayer)
+        --Mask
+        weights[{ {maskStartOp,maskEndOp}, {maskStartIp,maskEndIp},
+                  {}, {pixelPos} }] = 0
+
+
+        ---------------
+        --Mask the next n_op features
+        ---------------
+
+        -- This can be done by just shifting the starting and ending positions
+        -- of op features by n_op
+        maskStartOp = maskStartOp + n_op
+        maskEndOp = maskEndOp + n_op
+
+        --Mask
+        weights[{ {maskStartOp,maskEndOp}, {maskStartIp,maskEndIp},
+                  {}, {pixelPos} }] = 0
+    end
+end
+
+
+
+local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
 
     -- Define the previous vertical and horizontal stack
     local vStackIn = - nn.Identity() --make it a nngraph node
     local hStackIn = - nn.Identity() --make it a nngraph node
 
+
+    local noChannels = noChannels --This helps during masking, when it is
+                                  -- not the first layer
 
     -------------------------------------
     --Compute the output vertical stack
@@ -115,8 +160,8 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, isFirstLayer)
                                         1,1, padW, padH)
         hCropped = nn.SpatialZeroPadding(0, -n_extraRows, 0, 0)
     else
-        hConv = nn.SpatialConvolutionMM_masked(n_ip, 2*n_op, kernelW, kernelH,
-                                        1,1, padW, padH)
+        hConv = nn.SpatialConvolution_masked(n_ip, 2*n_op, kernelW, kernelH,
+                                        1,1, padW, padH, maskChannels, noChannels)
         hCropped = nn.SpatialZeroPadding(0, -n_extraRows+1, 0, 0)
     end
 
@@ -146,18 +191,20 @@ end
 
 
 
-local function createModel(noChannels, noFeatures, noLayers, noClasses,
+function createModel(noChannels, noFeatures, noLayers, noClasses,
                            firstFiltSize, genFiltSize)
 
     local input = - nn.Identity()
 
     local layers = nn.Sequential()
     for loopLayers = 1, noLayers do
-        layers:add(gatedPixelUnit(noFeatures, noFeatures, genFiltSize, false))
+        layers:add(gatedPixelUnit(noFeatures, noFeatures, genFiltSize, noChannels,
+                                  false))
     end
 
     local output = {input, nn.Identity()(input)}
-        - gatedPixelUnit(noChannels, noFeatures, firstFiltSize, true)
+        - gatedPixelUnit(noChannels, noFeatures, firstFiltSize, noChannels,
+                         true)
         - layers
 
     local model = nn.gModule({input}, {output})
