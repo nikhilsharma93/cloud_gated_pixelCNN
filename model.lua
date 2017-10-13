@@ -6,7 +6,7 @@ require 'torch'
 require 'nn'
 require 'nngraph'
 require 'math'
-
+require 'SpatialConvolutionMM_masked'
 
 local function gatedActivationUnit(n_op)
     -- Define the gated activations
@@ -58,21 +58,22 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, isFirstLayer)
     -------------------------------------
 
     -- As hinted in the paper, the n*n masked convolution can be done by
-    -- ceil(n/2)*n kernel with appropriate padding and cropping
+    -- floor(n/2)*n kernel with appropriate padding and cropping
     local kernelW = filtSize
-    local kernelH = math.ceil(filtSize/2)
+    local kernelH = math.floor(filtSize/2)
     local padW = math.floor(filtSize/2) -- so that width of op = width of ip
-    local padH = math.ceil(filtSize/2)
+    local padH = math.floor(filtSize/2)
         -- so that 1st row of op is does not depend on ip,
         -- 2nd row of op depends on 1st row of ip,
-        -- 3rd row depends on 1st and 2nd row of ip, and so on
+        -- 3rd row depends on 1st and 2nd row of ip, and so on, according
+        -- to kernel size
 
     local vConv = nn.SpatialConvolutionMM(n_ip, 2*n_op, kernelW, kernelH,
                                           1,1, padW, padH)
 
     -- Note that the op of this layer has extra rows at the bottom, due to padding
     -- Crop those rows out
-    local n_extraRows = math.ceil(filtSize/2) + 1 --number of extra rows
+    local n_extraRows = math.floor(filtSize/2) + 1 --number of extra rows
     local vCropped = nn.SpatialZeroPadding(0,0,0, -n_extraRows)
 
     local vConvCropped = vStackIn
@@ -89,28 +90,35 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, isFirstLayer)
     -------------------------------------
 
     -- As hinted in the paper, the n*1 masked convolution can be done by
-    -- ceil(n/2)*1 kernel with appropriate padding and cropping
-    kernelW = math.ceil(filtSize/2)
+    -- floor(n/2)*1 kernel with appropriate padding and cropping, if first layer,
+    -- because current pixel should be masked
+    -- ceil(n/2)*1 kernel with appropriate padding and cropping, if other layer
+    if isFirstLayer == true then kernelW = math.floor(filtSize/2)
+    else
+        kernelW = math.ceil(filtSize/2)
+    end
     kernelH = 1
-    padW = math.ceil(filtSize/2)
+    padW = math.floor(filtSize/2)
         -- so that 1st pixel in a given row does not depend on ip
         -- 2nd pixel in that row depends on the 1st
         -- 3rd pixel in that row depends on the 1st and 2nd, and so on
     padH = 0
 
-    local hConv = nn.SpatialConvolutionMM(n_ip, 2*n_op, kernelW, kernelH,
-                                          1,1, padW, padH)
-
-    -- Here cropping depends on whether or not it is the first layer
-    -- If yes, then it is of mask type A in the paper
-    -- If no, then it is of mask type B in the paper
+    local hConv
     local hCropped
+
+    -- If first layer, then ith pixel is already masked by kernel width
+    -- If not, then ith pixel can the ith pixels from previous channels only
+    -- Hence, we have to use a channel mask
     if isFirstLayer == true then
+        hConv = nn.SpatialConvolutionMM(n_ip, 2*n_op, kernelW, kernelH,
+                                        1,1, padW, padH)
         hCropped = nn.SpatialZeroPadding(0, -n_extraRows, 0, 0)
     else
-        hCropped = nn.SpatialZeroPadding(-1, -n_extraRows+1, 0, 0)
+        hConv = nn.SpatialConvolutionMM_masked(n_ip, 2*n_op, kernelW, kernelH,
+                                        1,1, padW, padH)
+        hCropped = nn.SpatialZeroPadding(0, -n_extraRows+1, 0, 0)
     end
-
 
 
     -- Fuse the hStackIn and 1*1 convolved vStackOut
@@ -157,6 +165,6 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
 end
 
 --model = gatedPixelUnit(10,10,3, false)
-model = createModel(1, 10, 5, 4, 7, 5)
+model = createModel(1, 12, 5, 4, 9,  11)
 print (type(model))
 graph.dot(model.fg,'CNN','CNNVerify')
