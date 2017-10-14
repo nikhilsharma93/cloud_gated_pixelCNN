@@ -191,7 +191,7 @@ end
 
 
 
-function createModel(noChannels, noFeatures, noLayers, noClasses,
+local function createModel(noChannels, noFeatures, noLayers, noClasses,
                            firstFiltSize, genFiltSize)
 
     local input = - nn.Identity()
@@ -224,20 +224,81 @@ function createModel(noChannels, noFeatures, noLayers, noClasses,
     -- BatchSize * (noChannels*noClasses) * N * N
     -- Break it into chunks of size "BatchSize*noChannels*N*N"
     -- LogSoftMax by itself will do the spatial log softmax on each chunk
-    local convertToProb = nn.Sequential()
-        convertToProb:add(nn.LogSoftMax())
+    local function logSM(index)
+        local model = nn.Sequential()
+            model:add(nn.Narrow(2, (index-1)*noClasses+1, noClasses))
+            model:add(nn.LogSoftMax())
+        return model
+    end
 
-
+    local split = nn.ConcatTable()
+    for loopSplit = 1, noChannels do
+        split:add(logSM(loopSplit))
+    end
 
 
     local finalOutput = output
         - outputLayer
+        - split
 
     local model = nn.gModule({input}, {finalOutput})
     return model
 end
 
---model = gatedPixelUnit(10,10,3, false)
-model = createModel(1, 12, 5, 4, 9,  11)
-print (type(model))
-graph.dot(model.fg,'CNN','CNNVerify')
+
+local function calcLoss(output, target, input)
+
+    -- Calculate and return E, dE
+    local loss = nn.SpatialClassNLLCriterion()
+    local output = output
+    local target = target
+    local input = input
+    local E = {}
+    local dE_dy = {}
+
+    for loopChannels = 1, #output do
+        E[loopChannels] = loss:forward(nn.SelectTable(loopChannels):forward(output),
+                                       nn.SelectTable(loopChannels):forward(target))
+        dE_dy[loopChannels] = loss:backward(nn.SelectTable(loopChannels):forward(output),
+                                       nn.SelectTable(loopChannels):forward(target))
+    end
+    return E, dE_dy
+end
+
+
+
+local function testModel()
+    model = createModel(3, 12, 5, 256, 7, 3)
+    inp = torch.rand(2,3,32,32)
+    target={}
+    for i=1,3 do
+        target[i]=torch.Tensor(2,32,32):random(255)
+    end
+
+
+    -- Test model forward
+    local function testForward(model, inp)
+        return model:forward(inp)
+    end
+    ok, op = pcall(testForward, model, inp)
+    if ok then print ('Tested Model Forward') end
+
+
+    -- Test Loss
+    ok, e, de = pcall(calcLoss, op, target, inp)
+    if ok then print ('Tested Loss Function') end
+
+
+    -- Test model forward
+    local function testBackward(model, inp, d)
+        model:backward(inp, d);
+    end
+    ok = pcall(testBackward, model, inp, de)
+    if ok then print ('Tested Model Backward') end
+
+
+    -- Plot/Save the model to visualize
+    graph.dot(model.fg,'CNN','CNNVerify')
+end
+
+testModel()
