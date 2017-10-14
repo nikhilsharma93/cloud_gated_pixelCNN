@@ -108,10 +108,7 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local kernelH = math.floor(filtSize/2)
     local padW = math.floor(filtSize/2) -- so that width of op = width of ip
     local padH = math.floor(filtSize/2)
-        -- so that 1st row of op is does not depend on ip,
-        -- 2nd row of op depends on 1st row of ip,
-        -- 3rd row depends on 1st and 2nd row of ip, and so on, according
-        -- to kernel size
+        -- To align with the masking scheme
 
     local vConv = nn.SpatialConvolutionMM(n_ip, 2*n_op, kernelW, kernelH,
                                           1,1, padW, padH)
