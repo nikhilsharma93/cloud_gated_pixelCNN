@@ -141,9 +141,7 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     end
     kernelH = 1
     padW = math.floor(filtSize/2)
-        -- so that 1st pixel in a given row does not depend on ip
-        -- 2nd pixel in that row depends on the 1st
-        -- 3rd pixel in that row depends on the 1st and 2nd, and so on
+    -- To align with the masking scheme
     padH = 0
 
     local hConv
