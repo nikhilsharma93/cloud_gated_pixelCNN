@@ -201,7 +201,7 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
                                   false))
     end
 
-    local output = {input, nn.Identity()(input)}
+    local output = {input, nn.Copy()(input)}
         - gatedPixelUnit(noChannels, noFeatures, firstFiltSize, noChannels,
                          true)
         - layers
