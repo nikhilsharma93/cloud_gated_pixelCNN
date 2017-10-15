@@ -1,5 +1,7 @@
 ------------------------------------------------------------------------------
 -- __Author__ = Nikhil Sharma
+-- This file defines the model, creates one, and returns it to be used by
+-- train.lua and test.lua
 ------------------------------------------------------------------------------
 
 require 'torch'
@@ -7,6 +9,12 @@ require 'nn'
 require 'nngraph'
 require 'math'
 require 'SpatialConvolution_masked'
+local nninit = require 'nninit'
+
+
+local function initializeConv(moduleName, ...)
+    return moduleName(...)--:init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
+end
 
 local function gatedActivationUnit(n_op)
     -- Define the gated activations
@@ -31,7 +39,7 @@ end
 
 
 local function fuse(n_op, factor)
-    local fuseConv = nn.SpatialConvolutionMM(factor*n_op, factor*n_op, 1, 1)
+    local fuseConv = initializeConv(nn.SpatialConvolutionMM, factor*n_op, factor*n_op, 1, 1)
 
     local parallel = nn.ParallelTable()
         parallel:add(nn.Identity())
@@ -87,7 +95,6 @@ local function maskChannels(weights, n_ip, n_op, kW, noChannels)
 end
 
 
-
 local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
 
     -- Define the previous vertical and horizontal stack
@@ -110,8 +117,8 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local padH = math.floor(filtSize/2)
         -- To align with the masking scheme
 
-    local vConv = nn.SpatialConvolutionMM(n_ip, 2*n_op, kernelW, kernelH,
-                                          1,1, padW, padH)
+    local vConv = initializeConv(nn.SpatialConvolutionMM,
+                                 n_ip, 2*n_op, kernelW, kernelH, 1,1, padW, padH)
 
     -- Note that the op of this layer has extra rows at the bottom, due to padding
     -- Crop those rows out
@@ -151,12 +158,12 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     -- If not, then ith pixel can the ith pixels from previous channels only
     -- Hence, we have to use a channel mask
     if isFirstLayer == true then
-        hConv = nn.SpatialConvolutionMM(n_ip, 2*n_op, kernelW, kernelH,
-                                        1,1, padW, padH)
+        hConv = initializeConv(nn.SpatialConvolutionMM,
+                               n_ip, 2*n_op, kernelW, kernelH, 1,1, padW, padH)
         hCropped = nn.SpatialZeroPadding(0, -n_extraRows, 0, 0)
     else
-        hConv = nn.SpatialConvolution_masked(n_ip, 2*n_op, kernelW, kernelH,
-                                        1,1, padW, padH, maskChannels, noChannels)
+        hConv = initializeConv(nn.SpatialConvolution_masked, n_ip, 2*n_op,
+                               kernelW, kernelH, 1,1, padW, padH, maskChannels, noChannels)
         hCropped = nn.SpatialZeroPadding(0, -n_extraRows+1, 0, 0)
     end
 
@@ -180,10 +187,7 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
             - fuse(n_op, 1)
         return nn.gModule({vStackIn, hStackIn}, {vStackOut, hResidualOut})
     end
-
 end
-
-
 
 
 local function createModel(noChannels, noFeatures, noLayers, noClasses,
@@ -207,11 +211,11 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
         outputLayer:add(nn.SelectTable(2)) --Select the horizontal stack out
         -- Followed by 2 layers of (ReLU + 1*1 conv of mask B)
         outputLayer:add(nn.ReLU())
-        outputLayer:add(nn.SpatialConvolution_masked(noFeatures, noFeatures, 1,1,
-                        1,1,0,0, maskChannels, noChannels))
+        outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
+                                        noFeatures, 1,1, 1,1,0,0, maskChannels, noChannels))
         outputLayer:add(nn.ReLU())
-        outputLayer:add(nn.SpatialConvolution_masked(noFeatures, noClasses*noChannels,
-                        1,1,1,1,0,0, maskChannels, noChannels))
+        outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
+                                        noClasses*noChannels, 1,1,1,1,0,0, maskChannels, noChannels))
 
 
     --Final SoftMax / Sigmoid layer
@@ -241,32 +245,43 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
 end
 
 
-local function calcLoss(output, target, input)
+function calcLoss(output, target, backward)
 
     -- Calculate and return E, dE
     local loss = nn.SpatialClassNLLCriterion()
     local output = output
     local target = target
-    local input = input
     local E = {}
-    local dE_dy = {}
+    local avgLoss = 0
 
     for loopChannels = 1, #output do
-        E[loopChannels] = loss:forward(nn.SelectTable(loopChannels):forward(output),
-                                       nn.SelectTable(loopChannels):forward(target))
+        local currentLoss = loss:forward(nn.SelectTable(loopChannels):forward(output),
+                             nn.SelectTable(loopChannels):forward(target))
+        E[loopChannels] = currentLoss
+        avgLoss = avgLoss + currentLoss
+    end
+    avgLoss = avgLoss / #output
+
+    if backward == nil then return E, avgLoss end
+
+    --Else, backward is required
+    local dE_dy = {}
+    for loopChannels = 1, #output do
         dE_dy[loopChannels] = loss:backward(nn.SelectTable(loopChannels):forward(output),
                                        nn.SelectTable(loopChannels):forward(target))
     end
-    return E, dE_dy
+
+    return E, dE_dy, avgLoss
 end
 
 
-
+-- Optional; to test model
 local function testModel()
-    model = createModel(3, 12, 5, 256, 7, 3)
-    inp = torch.rand(2,3,32,32)
+    local noChannels = 3
+    model = createModel(noChannels, 12, 5, 256, 7, 3)
+    inp = torch.rand(2,noChannels,32,32)
     target={}
-    for i=1,3 do
+    for i=1,noChannels do
         target[i]=torch.Tensor(2,32,32):random(255)
     end
 
@@ -280,7 +295,7 @@ local function testModel()
 
 
     -- Test Loss
-    ok, e, de = pcall(calcLoss, op, target, inp)
+    ok, e, de = pcall(calcLoss, op, target, true)
     if ok then print ('Tested Loss Function') end
 
 
@@ -297,3 +312,24 @@ local function testModel()
 end
 
 testModel()
+
+
+---------------------------------------------------------
+-- Create a model and return it
+---------------------------------------------------------
+local noChannels = 3     --No of input channels
+local noFeatures = 128    --Hidden layer features
+local noLayers = 15      --No of hidden layers
+local noClasses = 256    --8-bit image, 1 to 256 values
+local firstFiltSize = 7  --filter size at input
+local genFiltSize = 3    --filter size of hidden layer
+
+model = createModel(noChannels, noFeatures, noLayers, noClasses,
+                    firstFiltSize, genFiltSize)
+
+
+-- return package:
+return {
+   model = model,
+   loss = calcLoss,
+}
