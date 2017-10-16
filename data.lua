@@ -27,7 +27,7 @@ local rootDir = string.sub(currentDir, 1, string.len(currentDir) - lastSlash + 1
 
 local baseFileDir = currentDir..'/Data/cifar-10-batches-py/extracted/'
 
-local datasetNum = torch.LongStorage({1,2,3,4,5})
+local datasetNum = torch.LongStorage({1})
 local testName = 'test_batch'
 
 
@@ -39,6 +39,8 @@ end
 
 local numberTest = #ls(baseFileDir..testName..'/')
 
+numberTrain = 4000
+numberTest = 200
 local totalNoImages = numberTrain + numberTest
 
 
@@ -59,6 +61,7 @@ for i = 1, datasetNum:size() do
   local currentDir = baseFileDir..'data_batch_'..tostring(datasetNum[i])..'/'
   print ('Loading from dataset '..tostring(i))
   for imgName in lfs.dir(currentDir) do
+      if loopVar1 < numberTrain then
   	ok,img=pcall(image.load, currentDir..imgName, 3,'byte')
     if ok then
       allImages[loopVar1+1] = img:clone()
@@ -66,17 +69,20 @@ for i = 1, datasetNum:size() do
       loopVar1 = loopVar1 + 1
     end
   end
+  end
 end
 print ('Loaded training data: '..tostring(loopVar1))
 
 --Testing Data
 local testDir = baseFileDir..testName..'/'
 for imgName in lfs.dir(testDir) do
+    if loopVar1 < totalNoImages then
   ok,img=pcall(image.load, testDir..imgName, 3,'byte')
   if ok then
     allImages[loopVar1+1] = img:clone()
     allLabels[loopVar1+1] = img:type('torch.DoubleTensor') + 1
     loopVar1 = loopVar1 + 1
+  end
   end
 end
 print ('Loaded testing data: '..tostring(loopVar1))
@@ -117,7 +123,7 @@ end
 allImages = nil
 allLabels = nil
 
-
+--[[]
 ----------------------------------------------------------------------
 print(sys.COLORS.red ..  'Preprocessing the data..' .. sys.COLORS.black ..'\n')
 local channels = {'r','g','b'}
@@ -179,7 +185,7 @@ if false then --opt.visualize then
    --print (first128Samples:size())
    image.display{image=first128Samples, nrow=16, legend='Some traininglabels'}
 end
-
+]]
 
 return {
   trainData = trainData,

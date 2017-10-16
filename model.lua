@@ -132,7 +132,9 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local vStackOut = vConvCropped
         - gatedActivationUnit(n_op)
 
-
+    -- Try Batch Normalization
+--    local vStackOut_bn = vStackOut
+--        - nn.SpatialBatchNormalization(n_op)
 
     -------------------------------------
     --Compute the output horizontal stack
@@ -179,14 +181,20 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
 
 
     --If this is the first layer, there are no residual connections
+    local hResidualOut
     if isFirstLayer == true then
-        return nn.gModule({vStackIn, hStackIn}, {vStackOut, hStackOut})
+        hResidualOut = hStackOut
+        --return nn.gModule({vStackIn, hStackIn}, {vStackOut_bn, hResidualOut})
     else
         --Add the residual connections
-        local hResidualOut = {hStackOut, hStackIn}
+        hResidualOut = {hStackOut, hStackIn}
             - fuse(n_op, 1)
-        return nn.gModule({vStackIn, hStackIn}, {vStackOut, hResidualOut})
     end
+
+--    local hResidualOut_bn = hResidualOut
+--        - nn.SpatialBatchNormalization(n_op)
+
+    return nn.gModule({vStackIn, hStackIn}, {vStackOut, hResidualOut})
 end
 
 
