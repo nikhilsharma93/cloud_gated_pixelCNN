@@ -1,66 +1,61 @@
 digraph G {
-	graph [bb="0,0,694,1874"];
+	graph [bb="0,0,499.22,1488"];
 	node [label="\N",
 		shape=oval
 	];
-	n1	 [height=6.9336,
-		label="Node1\ngradOutput = {{Tensor[2x256x32x32],Tensor[2x256x32x32],Tensor[2x256x32x32]}}\lmodule = nn.ConcatTable {\l  input\l    |`-> (\
-1): nn.Sequential {\l    |      [input -> (1) -> (2) -> output]\l    |      (1): nn.Narrow\l    |      (2): nn.LogSoftMax\l    |    }\l    |`\
--> (2): nn.Sequential {\l    |      [input -> (1) -> (2) -> output]\l    |      (1): nn.Narrow\l    |      (2): nn.LogSoftMax\l    |    }\l     `\
--> (3): nn.Sequential {\l           [input -> (1) -> (2) -> output]\l           (1): nn.Narrow\l           (2): nn.LogSoftMax\l         }\l     \
-... -> output\l}\linput = {Tensor[2x768x32x32]}\lreverseMap = {}",
-		pos="347,382",
-		tooltip="[/home/nikhil/torch/install/share/lua/5.2/nngraph/init.lua]:76_",
-		width=9.6415];
+	n1	 [height=1.6303,
+		label="Node1\nreverseMap = {}\lgradOutput = {Tensor[2x1x28x28]}\linput = {Tensor[2x1x28x28]}\lmodule = nn.Sigmoid",
+		pos="249.61,190.86",
+		tooltip="[/home/nsharma/torch/install/share/lua/5.2/nngraph/init.lua]:76_",
+		width=4.223];
 	n2	 [height=1.3356,
-		label="Node2\ninput = {{Tensor[2x256x32x32],Tensor[2x256x32x32],Tensor[2x256x32x32]}}\lgradOutput = {{Tensor[2x256x32x32],Tensor[2x256x32x32],\
-Tensor[2x256x32x32]}}\lreverseMap = {}",
-		pos="347,48",
+		label="Node2\nreverseMap = {}\lgradOutput = {Tensor[2x1x28x28]}\linput = {Tensor[2x1x28x28]}",
+		pos="249.61,48.083",
 		tooltip="[[C]]:-1_",
-		width=9.6415];
-	n1 -> n2	 [pos="e,347,96.355 347,132.35 347,123.26 347,114.61 347,106.57"];
+		width=4.223];
+	n1 -> n2	 [pos="e,249.61,96.295 249.61,131.79 249.61,123.39 249.61,114.74 249.61,106.36"];
 	n3	 [height=3.6927,
-		label="Node3\ngradOutput = {Tensor[2x768x32x32]}\lmodule = nn.Sequential {\l  [input -> (1) -> (2) -> (3) -> (4) -> (5) -> output]\l  (\
-1): nn.SelectTable(2)\l  (2): nn.ReLU\l  (3): nn.SpatialConvolution_masked(12 -> 12, 1x1)\l  (4): nn.ReLU\l  (5): nn.SpatialConvolution_\
-masked(12 -> 768, 1x1)\l}\linput = {{Tensor[2x12x32x32],Tensor[2x12x32x32]}}\lreverseMap = {}",
-		pos="347,801",
-		tooltip="[/home/nikhil/torch/install/share/lua/5.2/nngraph/init.lua]:76_",
-		width=6.2579];
-	n3 -> n1	 [pos="e,347,631.67 347,668.06 347,659.48 347,650.69 347,641.78"];
+		label="Node3\nreverseMap = {}\lgradOutput = {Tensor[2x1x28x28]}\linput = {{Tensor[2x12x28x28],Tensor[2x12x28x28]}}\lmodule = nn.Sequential {\l  [\
+input -> (1) -> (2) -> (3) -> (4) -> (5) -> output]\l  (1): nn.SelectTable(2)\l  (2): nn.ReLU\l  (3): nn.SpatialConvolution_masked(\
+12 -> 32, 1x1)\l  (4): nn.ReLU\l  (5): nn.SpatialConvolution_masked(32 -> 1, 1x1)\l}",
+		pos="249.61,418.48",
+		tooltip="[/home/nsharma/torch/install/share/lua/5.2/nngraph/init.lua]:76_",
+		width=6.2658];
+	n3 -> n1	 [pos="e,249.61,249.63 249.61,285.26 249.61,276.53 249.61,267.97 249.61,259.78"];
 	n4	 [height=3.6927,
-		label="Node4\ngradOutput = {{Tensor[2x12x32x32],Tensor[2x12x32x32]}}\lmodule = nn.Sequential {\l  [input -> (1) -> (2) -> (3) -> (4) -> (\
-5) -> output]\l  (1): nn.gModule\l  (2): nn.gModule\l  (3): nn.gModule\l  (4): nn.gModule\l  (5): nn.gModule\l}\linput = {{Tensor[\
-2x12x32x32],Tensor[2x12x32x32]}}\lreverseMap = {}",
-		pos="347,1103",
-		tooltip="[/home/nikhil/torch/install/share/lua/5.2/nngraph/init.lua]:76_",
-		width=6.9251];
-	n4 -> n3	 [pos="e,347,933.98 347,969.98 347,961.39 347,952.73 347,944.09"];
+		label="Node4\nreverseMap = {}\lgradOutput = {{Tensor[2x12x28x28],Tensor[2x12x28x28]}}\linput = {{Tensor[2x12x28x28],Tensor[2x12x28x28]}}\lmodule = \
+nn.Sequential {\l  [input -> (1) -> (2) -> (3) -> (4) -> (5) -> output]\l  (1): nn.gModule\l  (2): nn.gModule\l  (3): nn.gModule\l  (\
+4): nn.gModule\l  (5): nn.gModule\l}",
+		pos="249.61,720.35",
+		tooltip="[/home/nsharma/torch/install/share/lua/5.2/nngraph/init.lua]:76_",
+		width=6.9336];
+	n4 -> n3	 [pos="e,249.61,551.88 249.61,587.39 249.61,579.01 249.61,570.56 249.61,562.13"];
 	n5	 [height=1.9249,
-		label="Node5\ngradOutput = {{Tensor[2x12x32x32],Tensor[2x12x32x32]}}\lmodule = nn.gModule\linput = {Tensor[2x3x32x32],Tensor[2x3x32x32]}\lreverseMap = {}\lmapindex = {\
-Node6,Node7}",
-		pos="347,1342",
-		tooltip="[/home/nikhil/torch/install/share/lua/5.2/nngraph/init.lua]:69_",
-		width=6.9251];
-	n5 -> n4	 [pos="e,347,1236.3 347,1272.4 347,1264.1 347,1255.4 347,1246.4"];
+		label="Node5\nreverseMap = {}\lgradOutput = {{Tensor[2x12x28x28],Tensor[2x12x28x28]}}\linput = {Tensor[2x1x28x28],Tensor[2x1x28x28]}\lmapindex = {\
+Node6,Node7}\lmodule = nn.gModule",
+		pos="249.61,958.59",
+		tooltip="[/home/nsharma/torch/install/share/lua/5.2/nngraph/init.lua]:69_",
+		width=6.9336];
+	n5 -> n4	 [pos="e,249.61,853.63 249.61,889.26 249.61,881.04 249.61,872.43 249.61,863.63"];
 	n6	 [height=1.9249,
-		label="Node6\ninput = {Tensor[2x3x32x32]}\lgradOutput = {Tensor[2x3x32x32],Tensor[2x3x32x32]}\lmodule = nn.Identity\lgradOutputBuffer = \
-Tensor[2x3x32x32]\lreverseMap = {}",
-		pos="347,1672",
-		tooltip="[/home/nikhil/torch/install/share/lua/5.2/nngraph/init.lua]:65_",
-		width=6.3961];
-	n6 -> n5	 [pos="e,293.53,1409.7 293.71,1604.5 286.42,1592.3 280.06,1579.3 276,1566 260.64,1515.9 260.64,1498.1 276,1448 279.05,1438 283.41,1428.2 \
-288.48,1418.7"];
+		label="Node6\nreverseMap = {}\lgradOutputBuffer = Tensor[2x1x28x28]\lgradOutput = {Tensor[2x1x28x28],Tensor[2x1x28x28]}\linput = {Tensor[\
+2x1x28x28]}\lmodule = nn.Identity",
+		pos="249.61,1286.6",
+		tooltip="[/home/nsharma/torch/install/share/lua/5.2/nngraph/init.lua]:65_",
+		width=6.4032];
+	n6 -> n5	 [pos="e,195.8,1026.4 195.97,1219 188.83,1207.1 182.61,1194.2 178.61,1181.3 163.25,1131.4 163.25,1113.7 178.61,1063.9 181.61,1054.1 185.88,\
+1044.5 190.84,1035.2"];
 	n7	 [height=1.6303,
-		label="Node7\ngradOutput = {Tensor[2x3x32x32]}\lmodule = nn.Identity\linput = {Tensor[2x3x32x32]}\lreverseMap = {}",
-		pos="437,1507",
-		tooltip="[model.lua]:205_",
-		width=4.2226];
-	n6 -> n7	 [pos="e,405.73,1564.6 384.39,1603.3 389.82,1593.4 395.41,1583.3 400.82,1573.5"];
-	n7 -> n5	 [pos="e,384.37,1410.7 405.77,1449.4 400.43,1439.8 394.81,1429.6 389.24,1419.5"];
+		label="Node7\nreverseMap = {}\lgradOutput = {Tensor[2x1x28x28]}\linput = {Tensor[2x1x28x28]}\lmodule = nn.Copy",
+		pos="339.61,1122.6",
+		tooltip="[./model.lua]:209_",
+		width=4.223];
+	n6 -> n7	 [pos="e,308.24,1180 287.26,1217.8 292.55,1208.3 297.98,1198.5 303.25,1189"];
+	n7 -> n5	 [pos="e,287.25,1027.3 308.13,1064.9 302.97,1055.6 297.55,1045.9 292.17,1036.2"];
 	n8	 [height=1.3356,
-		label="Node8\ninput = {Tensor[2x3x32x32]}\lgradOutput = {Tensor[2x3x32x32]}\lreverseMap = {}",
-		pos="347,1826",
+		label="Node8\nreverseMap = {}\lgradOutput = {Tensor[2x1x28x28]}\linput = {Tensor[2x1x28x28]}",
+		pos="249.61,1439.9",
 		tooltip="[[C]]:-1_",
-		width=4.2226];
-	n8 -> n6	 [pos="e,347,1741.4 347,1777.7 347,1769.4 347,1760.5 347,1751.5"];
+		width=4.223];
+	n8 -> n6	 [pos="e,249.61,1355.9 249.61,1391.5 249.61,1383.4 249.61,1374.8 249.61,1366.1"];
 }

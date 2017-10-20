@@ -15,7 +15,7 @@ local model = t.model
 local loss = t.loss
 
 -- Logger:
-local testLogger = optim.Logger(paths.concat(opt.save, 'testV1.log'))
+local testLogger = optim.Logger(paths.concat(opt.save, 'testV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.log'))
 
 ----------------------------------------------------------------------
 print(sys.COLORS.red ..  '==> allocating minibatch memory')
@@ -23,13 +23,13 @@ print(sys.COLORS.red ..  '==> allocating minibatch memory')
 local x = torch.Tensor(opt.batchSize,testData.data:size(2),
                        testData.data:size(3), testData.data:size(4))
 
-local ytHelper = torch.Tensor(opt.batchSize,testData.labels:size(2),
-                              testData.labels:size(3), testData.labels:size(4))
+local yt = torch.Tensor(opt.batchSize,testData.labels:size(2),
+                              testData.labels:size(3))
 
 
 if opt.type == 'cuda' then
    x = x:cuda()
-   ytHelper = ytHelper:cuda()
+   yt = yt:cuda()
 end
 
 ----------------------------------------------------------------------
@@ -60,23 +60,17 @@ function test(testData)
       local idx = 1
       for i = t,t+opt.batchSize-1 do
          x[idx] = trainData.data[i]
-         ytHelper[idx] = trainData.labels[i]
+         yt[idx] = trainData.labels[i]
          idx = idx + 1
       end
-
-      -- create yt from ytHelper
-      yt = nn.SplitTable(1,3):forward(ytHelper)
 
 
       -- test sample
       local y = model:forward(x)
 
       local ETest
-      local avgLoss
-      ETest, avgLoss = loss(y,yt)
-      nllTest = nllTest +avgLoss
-
-
+      ETest = loss(y,yt)
+      nllTest = nllTest + ETest
    end
 
    -- timing

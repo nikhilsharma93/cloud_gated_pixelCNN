@@ -13,7 +13,7 @@ local nninit = require 'nninit'
 
 
 local function initializeConv(moduleName, ...)
-    return moduleName(...)--:init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
+    return moduleName(...):init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
 end
 
 local function gatedActivationUnit(n_op)
@@ -132,9 +132,6 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local vStackOut = vConvCropped
         - gatedActivationUnit(n_op)
 
-    -- Try Batch Normalization
---    local vStackOut_bn = vStackOut
---        - nn.SpatialBatchNormalization(n_op)
 
     -------------------------------------
     --Compute the output horizontal stack
@@ -199,7 +196,7 @@ end
 
 
 local function createModel(noChannels, noFeatures, noLayers, noClasses,
-                           firstFiltSize, genFiltSize)
+                           firstFiltSize, genFiltSize, noOutputFeatures)
 
     local input = - nn.Identity()
 
@@ -220,33 +217,21 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
         -- Followed by 2 layers of (ReLU + 1*1 conv of mask B)
         outputLayer:add(nn.ReLU())
         outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
-                                        noFeatures, 1,1, 1,1,0,0, maskChannels, noChannels))
+                                        noOutputFeatures, 1,1, 1,1,0,0, maskChannels, noChannels))
         outputLayer:add(nn.ReLU())
-        outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
+        outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noOutputFeatures,
                                         noClasses*noChannels, 1,1,1,1,0,0, maskChannels, noChannels))
 
 
-    --Final SoftMax / Sigmoid layer
+    --Final Sigmoid layer
     -- After the previous layer, the 4D output is
     -- BatchSize * (noChannels*noClasses) * N * N
     -- Break it into chunks of size "BatchSize*noChannels*N*N"
-    -- LogSoftMax by itself will do the spatial log softmax on each chunk
-    local function logSM(index)
-        local model = nn.Sequential()
-            model:add(nn.Narrow(2, (index-1)*noClasses+1, noClasses))
-            model:add(nn.LogSoftMax())
-        return model
-    end
-
-    local split = nn.ConcatTable()
-    for loopSplit = 1, noChannels do
-        split:add(logSM(loopSplit))
-    end
-
+    -- nn.Sigmoid by itself will do the spatial sigmoid on each chunk
 
     local finalOutput = output
         - outputLayer
-        - split
+        - nn.Sigmoid()
 
     local model = nn.gModule({input}, {finalOutput})
     return model
@@ -256,42 +241,28 @@ end
 function calcLoss(output, target, backward)
 
     -- Calculate and return E, dE
-    local loss = nn.SpatialClassNLLCriterion()
+    local loss = nn.BCECriterion()
     local output = output
     local target = target
-    local E = {}
-    local avgLoss = 0
 
-    for loopChannels = 1, #output do
-        local currentLoss = loss:forward(nn.SelectTable(loopChannels):forward(output),
-                             nn.SelectTable(loopChannels):forward(target))
-        E[loopChannels] = currentLoss
-        avgLoss = avgLoss + currentLoss
-    end
-    avgLoss = avgLoss / #output
+    local E
+    local dE_dy
 
-    if backward == nil then return E, avgLoss end
+    E = loss:forward(output, target)
+    if backward == nil then return E end
 
-    --Else, backward is required
-    local dE_dy = {}
-    for loopChannels = 1, #output do
-        dE_dy[loopChannels] = loss:backward(nn.SelectTable(loopChannels):forward(output),
-                                       nn.SelectTable(loopChannels):forward(target))
-    end
-
-    return E, dE_dy, avgLoss
+    dE_dy = loss:backward(output, target)
+    return E, dE_dy
 end
 
 
 -- Optional; to test model
 local function testModel()
-    local noChannels = 3
-    model = createModel(noChannels, 12, 5, 256, 7, 3)
-    inp = torch.rand(2,noChannels,32,32)
-    target={}
-    for i=1,noChannels do
-        target[i]=torch.Tensor(2,32,32):random(255)
-    end
+    local noChannels = 1
+    model = createModel(noChannels, 12, 5, 1, 7, 3, 32)
+    inp = torch.rand(2,noChannels,28,28)
+    target = torch.Tensor(2,28,28):random(1)
+
 
 
     -- Test model forward
@@ -325,19 +296,20 @@ testModel()
 ---------------------------------------------------------
 -- Create a model and return it
 ---------------------------------------------------------
-local noChannels = 3     --No of input channels
-local noFeatures = 128    --Hidden layer features
-local noLayers = 15      --No of hidden layers
-local noClasses = 256    --8-bit image, 1 to 256 values
+local noChannels = 1     --No of input channels
+local noFeatures = 16    --Hidden layer features
+local noLayers = 7      --No of hidden layers
+local noClasses = 1    --8-bit image, 1 to 256 values
 local firstFiltSize = 7  --filter size at input
 local genFiltSize = 3    --filter size of hidden layer
+local noOutputFeatures = 32 --No of features in the final output layer
 
 model = createModel(noChannels, noFeatures, noLayers, noClasses,
-                    firstFiltSize, genFiltSize)
+                    firstFiltSize, genFiltSize, noOutputFeatures)
 
 
 -- return package:
 return {
    model = model,
-   loss = calcLoss,
+   loss = calcLoss,--nn.BCECriterion(),
 }
