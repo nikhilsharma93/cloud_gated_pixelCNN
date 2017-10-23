@@ -13,7 +13,7 @@ local nninit = require 'nninit'
 
 
 local function initializeConv(moduleName, ...)
-    return moduleName(...)--:init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
+    return moduleName(...):init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
 end
 
 local function gatedActivationUnit(n_op)
@@ -39,7 +39,7 @@ end
 
 
 local function fuse(n_op, factor)
-    local fuseConv = initializeConv(nn.SpatialConvolutionMM, factor*n_op, factor*n_op, 1, 1)
+    local fuseConv = initializeConv(nn.SpatialConvolution, factor*n_op, factor*n_op, 1, 1)
 
     local parallel = nn.ParallelTable()
         parallel:add(nn.Identity())
@@ -67,8 +67,9 @@ local function maskChannels(weights, n_ip, n_op, kW, noChannels)
         local maskEndOp = loopChannels*(n_op/noChannels)
 
         -- Select the indices corresponding to ip channels
-        local maskStartIp = loopChannels+1
-        local maskEndIp = noChannels
+        if n_ip % 3 ~= 0 then print ('nip: ',n_ip); os.exit() end
+        local maskStartIp = (n_ip/noChannels)*loopChannels+1
+        local maskEndIp = (n_ip/noChannels)*noChannels
 
         -- Select the position of the ith pixel in the kernel
         local pixelPos = kW
@@ -117,7 +118,7 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local padH = math.floor(filtSize/2)
         -- To align with the masking scheme
 
-    local vConv = initializeConv(nn.SpatialConvolutionMM,
+    local vConv = initializeConv(nn.SpatialConvolution,
                                  n_ip, 2*n_op, kernelW, kernelH, 1,1, padW, padH)
 
     -- Note that the op of this layer has extra rows at the bottom, due to padding
@@ -160,7 +161,7 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     -- If not, then ith pixel can the ith pixels from previous channels only
     -- Hence, we have to use a channel mask
     if isFirstLayer == true then
-        hConv = initializeConv(nn.SpatialConvolutionMM,
+        hConv = initializeConv(nn.SpatialConvolution,
                                n_ip, 2*n_op, kernelW, kernelH, 1,1, padW, padH)
         hCropped = nn.SpatialZeroPadding(0, -n_extraRows, 0, 0)
     else
@@ -199,7 +200,7 @@ end
 
 
 local function createModel(noChannels, noFeatures, noLayers, noClasses,
-                           firstFiltSize, genFiltSize)
+                           firstFiltSize, genFiltSize, noOutputFeatures)
 
     local input = - nn.Identity()
 
@@ -220,9 +221,9 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
         -- Followed by 2 layers of (ReLU + 1*1 conv of mask B)
         outputLayer:add(nn.ReLU())
         outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
-                                        noFeatures, 1,1, 1,1,0,0, maskChannels, noChannels))
+                                        noOutputFeatures, 1,1, 1,1,0,0, maskChannels, noChannels))
         outputLayer:add(nn.ReLU())
-        outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
+        outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noOutputFeatures,
                                         noClasses*noChannels, 1,1,1,1,0,0, maskChannels, noChannels))
 
 
@@ -279,6 +280,8 @@ function calcLoss(output, target, backward)
                                        nn.SelectTable(loopChannels):forward(target))
     end
 
+    print (E)
+
     return E, dE_dy, avgLoss
 end
 
@@ -286,7 +289,7 @@ end
 -- Optional; to test model
 local function testModel()
     local noChannels = 3
-    model = createModel(noChannels, 12, 5, 256, 7, 3)
+    model = createModel(noChannels, 12, 5, 256, 7, 3, 15)
     inp = torch.rand(2,noChannels,32,32)
     target={}
     for i=1,noChannels do
@@ -320,20 +323,21 @@ local function testModel()
 end
 
 testModel()
-
+print ('creating model...')
 
 ---------------------------------------------------------
 -- Create a model and return it
 ---------------------------------------------------------
 local noChannels = 3     --No of input channels
-local noFeatures = 128    --Hidden layer features
-local noLayers = 15      --No of hidden layers
+local noFeatures = 128*noChannels    --Hidden layer features
+local noLayers = 3      --No of hidden layers
 local noClasses = 256    --8-bit image, 1 to 256 values
 local firstFiltSize = 7  --filter size at input
 local genFiltSize = 3    --filter size of hidden layer
+local noOutputFeatures = 512*noChannels --No of features in the final output layer
 
 model = createModel(noChannels, noFeatures, noLayers, noClasses,
-                    firstFiltSize, genFiltSize)
+                    firstFiltSize, genFiltSize, noOutputFeatures)
 
 
 -- return package:
