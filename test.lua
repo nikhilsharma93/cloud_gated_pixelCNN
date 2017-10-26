@@ -15,7 +15,7 @@ local model = t.model
 local loss = t.loss
 
 -- Logger:
-local testLogger = optim.Logger(paths.concat(opt.save, 'testV1.log'))
+local testLogger = optim.Logger(paths.concat(opt.save, 'testV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.log'))
 
 ----------------------------------------------------------------------
 print(sys.COLORS.red ..  '==> allocating minibatch memory')

@@ -7,6 +7,25 @@ require 'xlua'
 require 'optim'
 require 'os'
 
+
+--Borrowed piece
+--- Check if a file or directory exists in this path
+local function exists(file)
+   local ok, err, code = os.rename(file, file)
+   if not ok then
+      if code == 13 then
+         -- Permission denied, but it exists
+         return true
+      end
+   end
+   return ok, err
+end
+
+--- Check if a directory exists in this path
+local function isdir(path)
+   return exists(path)
+end
+
 ----------------------------------------------------------------------
 -- Model + Loss:
 local t = require 'model'
@@ -15,7 +34,7 @@ local loss = t.loss
 
 ----------------------------------------------------------------------
 -- Log results to files
-local trainLogger = optim.Logger(paths.concat(opt.save, 'trainV1.log'))
+local trainLogger = optim.Logger(paths.concat(opt.save, 'trainV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.log'))
 
 ----------------------------------------------------------------------
 print(sys.COLORS.red ..  '==> flattening model parameters')
@@ -32,7 +51,7 @@ local optimState = {
    learningRate = opt.learningRate,
    momentum = opt.momentum,
    weightDecay = opt.weightDecay,
-   learningRateDecay = 0--opt.learningRateDecay
+   learningRateDecay = opt.learningRateDecay
 }
 
 ----------------------------------------------------------------------
@@ -55,6 +74,22 @@ print(sys.COLORS.red ..  '==> defining training procedure')
 
 local epoch
 local saveDir = trainData.saveDir
+if not isdir(saveDir) then
+  print ('Creating DIR')
+  os.execute("mkdir -p "..saveDir)
+end
+
+
+local function multinomial(prob)
+	-- Re-order so actual probs are last, flatten into a flat list of probs
+	local flatProbs = prob:permute(1, 3, 4, 2):contiguous()
+	flatProbs = flatProbs:view(flatProbs:size(1)*flatProbs:size(2)*flatProbs:size(3), flatProbs:size(4))
+	-- Sample once from multinomial
+	local samp = torch.multinomial(flatProbs, 1, true)
+	-- Unflatten before returning
+	return samp:view(prob:size(1), prob:size(3), prob:size(4))
+end
+
 
 local function train(trainData)
 
@@ -125,16 +160,21 @@ local function train(trainData)
 
          -- Save the results to visualize
          -- Optional
-         if ((epoch % 10 == 0 or epoch <=2 ) and t < 20*opt.batchSize) then
+         --if ((epoch % 10 == 0 or epoch <=2 ) and t < 20*opt.batchSize) then
+         if (t < 40*opt.batchSize) then
+             --torch.save(saveDir..tostring(epoch)..'_'..tostring(t)..'_'..'mapPred.dat', y)
            for loopPred = 1,opt.batchSize do
                mapPred = torch.Tensor(trainData.labels:size(2),
                                       trainData.labels:size(3), trainData.labels:size(4))
+              mapPred_prob = mapPred:clone()
               for i = 1, #y do
                   local indx
                   _, indx = torch.max(y[i][loopPred], 1)
                   mapPred[i] = indx-1
+                  mapPred_prob[i] = multinomial(nn.Unsqueeze(1):forward(torch.exp(y[i][loopPred]))) - 1
               end
              image.save(saveDir..tostring(epoch)..'_'..tostring(t)..'_'..tostring(loopPred)..'_'..'mapPred.png', mapPred:type('torch.ByteTensor'))
+             image.save(saveDir..tostring(epoch)..'_'..tostring(t)..'_'..tostring(loopPred)..'_'..'mapPredProb.png', mapPred_prob:type('torch.ByteTensor'))
              trueLabel = torch.Tensor(trainData.labels:size(2),
                                     trainData.labels:size(3), trainData.labels:size(4))
              for i = 1, #y do
@@ -150,16 +190,24 @@ local function train(trainData)
          local avgLoss
          E, dE_dy, avgLoss = loss(y, yt, true)
          nll = nll + avgLoss
+         print ('\nnll: ', avgLoss)
+         for loopY = 1, #y do
+             print (torch.round(torch.max(y[loopY])/0.0001)*0.0001, torch.round(torch.min(y[loopY])/0.0001)*0.0001,
+                    E[loopY])
+         end
 
          -- backward through the model
          model:backward(x,dE_dy)
+
+         --clip
+         dE_dw:clamp(-2.0, 2.0)
 
          -- return f and df/dX
          return E,dE_dw
       end
 
       -- optimize on current mini-batch
-      optim.rmsprop(eval_E, w, optimState)
+      optim.adam(eval_E, w, optimState)
    end
 
    -- time taken
@@ -177,7 +225,7 @@ local function train(trainData)
      handle:close()
      if string.sub(content,1,3) == "yes" then
        print (sys.COLORS.blue .. 'Saving Model')
-       local filename = paths.concat(opt.save, 'modelV1.t7')
+       local filename = paths.concat(opt.save, 'modelV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.t7')
        os.execute('mkdir -p ' .. sys.dirname(filename))
        print('==> saving model to '..filename)
        model1 = model:clone()
