@@ -1,3 +1,7 @@
+------------------------------------------------------------------------------
+-- __Author__ = Nikhil Sharma
+------------------------------------------------------------------------------
+
 local ReshapeCustom, parent = torch.class('nn.ReshapeCustom', 'nn.Reshape')
 
 function ReshapeCustom:__init(noChannels, ...)
