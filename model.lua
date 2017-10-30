@@ -10,6 +10,7 @@ require 'nngraph'
 require 'math'
 require 'SpatialConvolution_masked'
 require 'ReshapeCustom'
+require 'BiasAddTable'
 local nninit = require 'nninit'
 
 
@@ -121,11 +122,13 @@ end
 
 
 
-local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
+local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer,
+                              embedddingSize)
 
     -- Define the previous vertical and horizontal stack
     local vStackIn = - nn.Identity() --make it a nngraph node
     local hStackIn = - nn.Identity() --make it a nngraph node
+    local embedding = - nn.Identity() --make it a nngraph node
 
 
     local noChannels = noChannels --This helps during masking, when it is
@@ -155,7 +158,11 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
         - vConv
         - vCropped
 
-    local vStackOut = vConvCropped
+    local verticalEmbedding = embedding
+        - nn.Linear(embedddingSize, 2*n_op)
+
+    local vStackOut = {vConvCropped, verticalEmbedding}
+        - nn.BiasAddTable()
         - gatedActivationUnit(n_op)
 
 
@@ -190,8 +197,14 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
         - hConv
         - hCropped
 
-    local hStackOut = {hConvCropped, vConvCropped}
+    local horizontalEmbedding = embedding
+        - nn.Linear(embedddingSize, 2*n_op)
+
+    local hFused = {hConvCropped, vConvCropped}
         - fuse(n_op, 2)
+
+    local hStackOut = {hFused, horizontalEmbedding}
+        - nn.BiasAddTable()
         - gatedActivationUnit(n_op)
 
 
@@ -205,24 +218,25 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
             - fuse(n_op, 1, noChannels, false, true)
     end
 
-    return nn.gModule({vStackIn, hStackIn}, {vStackOut, hResidualOut})
+    return nn.gModule({vStackIn, hStackIn, embedding}, {vStackOut, hResidualOut, embedding})
 end
 
 
-local function createModel(noChannels, noFeatures, noLayers, noClasses,
-                           firstFiltSize, genFiltSize, noOutputFeatures)
+local function createModel(noChannels, noFeatures, noLayers, quantLevels,
+                           firstFiltSize, genFiltSize, noOutputFeatures, embedddingSize)
 
     local input = - nn.Identity()
+    local embedding = - nn.Identity()
 
     local layers = nn.Sequential()
     for loopLayers = 1, noLayers do
         layers:add(gatedPixelUnit(noFeatures, noFeatures, genFiltSize, noChannels,
-                                  false))
+                                  false, embedddingSize))
     end
 
-    local output = {input, nn.Copy()(input)}
+    local output = {input, nn.Copy()(input), embedding}
         - gatedPixelUnit(noChannels, noFeatures, firstFiltSize, noChannels,
-                         true)
+                         true, embedddingSize)
         - layers
 
     --Now the output layer
@@ -236,15 +250,15 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
         outputLayer:add(nn.ReLU())
         outputLayer:add(nn.SpatialBatchNormalization(noOutputFeatures))
         outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noOutputFeatures,
-                                        noClasses*noChannels, 1,1,1,1,0,0, maskChannels, noChannels, false, true))
+                                        quantLevels*noChannels, 1,1,1,1,0,0, maskChannels, noChannels, false, true))
 
 
 
     local finalOutput = output
         - outputLayer
-    -- The 4D output is BatchSize * (noChannels*noClasses) * N * N
+    -- The 4D output is BatchSize * (noChannels*quantLevels) * N * N
 
-    local model = nn.gModule({input}, {finalOutput})
+    local model = nn.gModule({input, embedding}, {finalOutput})
     return model
 end
 
@@ -260,18 +274,19 @@ end
 -- Optional; to test model
 local function testModel()
     local noChannels = 3
-    model = nn.Sequential()
-        model:add(createModel(noChannels, 12, 5, 256, 7, 3, 15))
+    local model = nn.Sequential()
+        model:add(createModel(noChannels, 12, 5, 256, 7, 3, 15, 10))
         model:add(addSoftMax(noChannels))
-    inp = torch.rand(2,noChannels,32,32)
-    target = torch.Tensor(2*noChannels,32,32):random(255)
+    local inp = torch.rand(2,noChannels,32,32)
+    local embedding = torch.Tensor(2,10):rand(2,10)
+    local target = torch.Tensor(2*noChannels,32,32):random(255)
     local loss = nn.SpatialClassNLLCriterion()
 
     -- Test model forward
-    local function testForward(model, inp)
-        return model:forward(inp);
+    local function testForward(model, inp, emb)
+        return model:forward({inp,emb});
     end
-    ok,op = pcall(testForward, model, inp)
+    ok,op = pcall(testForward, model, inp, embedding)
     if ok then print ('Tested Model Forward') end
 
 
@@ -297,6 +312,7 @@ local function testModel()
 end
 
 testModel()
+
 print ('creating model...')
 
 ---------------------------------------------------------
@@ -305,18 +321,19 @@ print ('creating model...')
 local noChannels = 3     --No of input channels
 local noFeatures = 42*noChannels    --Hidden layer features
 local noLayers = 12        --No of hidden layers
-local noClasses = 256    --8-bit image, 1 to 256 values
+local quantLevels = 256    --8-bit image, 1 to 256 values
 local firstFiltSize = 7  --filter size at input
 local genFiltSize = 3    --filter size of hidden layer
 local noOutputFeatures = 340*noChannels --No of features in the final output layer
+local embedddingSize = 10  --length of one-hot encoding across different classes
 
 model = nn.Sequential()
-    model:add(createModel(noChannels, noFeatures, noLayers, noClasses,
-                          firstFiltSize, genFiltSize, noOutputFeatures))
+    model:add(createModel(noChannels, noFeatures, noLayers, quantLevels,
+                          firstFiltSize, genFiltSize, noOutputFeatures, embedddingSize))
     model:add(addSoftMax(noChannels))
 
-print (noChannels, noFeatures, noLayers, noClasses,
-                    firstFiltSize, genFiltSize, noOutputFeatures)
+print (noChannels, noFeatures, noLayers, quantLevels,
+                    firstFiltSize, genFiltSize, noOutputFeatures, embedddingSize)
 -- return package:
 return {
    model = model,
