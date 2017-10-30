@@ -9,15 +9,12 @@ require 'nn'
 require 'nngraph'
 require 'math'
 require 'SpatialConvolution_masked'
+require 'ReshapeCustom'
 local nninit = require 'nninit'
 
 
 local function initializeConv(moduleName, nip, nop, ...)
-    --return moduleName(...):init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
-    local model = nn.Sequential()
-        model:add(moduleName(nip, nop, ...))--:init('weight', nninit.xavier, {dist = 'normal', gain = 1.1}))
-        model:add(nn.SpatialBatchNormalization(nop))
-    return model
+    return moduleName(nip, nop, ...):init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
 end
 
 local function gatedActivationUnit(n_op)
@@ -25,10 +22,12 @@ local function gatedActivationUnit(n_op)
     local tanhBlock = nn.Sequential()
         tanhBlock:add(nn.Narrow(2, 1, n_op))
         tanhBlock:add(nn.Tanh())
+        tanhBlock:add(nn.SpatialBatchNormalization(n_op))
 
     local sigmoidBlock = nn.Sequential()
         sigmoidBlock:add(nn.Narrow(2, n_op+1, n_op))
         sigmoidBlock:add(nn.Sigmoid())
+        sigmoidBlock:add(nn.SpatialBatchNormalization(n_op))
 
     local parallel = nn.ConcatTable(2)
         parallel:add(tanhBlock)
@@ -41,30 +40,16 @@ local function gatedActivationUnit(n_op)
     return gatedActivation
 end
 
-
-local function fuse(n_op, factor)
-    local fuseConv = initializeConv(nn.SpatialConvolution, factor*n_op, factor*n_op, 1, 1)
-
-    local parallel = nn.ParallelTable()
-        parallel:add(nn.Identity())
-        parallel:add(fuseConv)
-
-    local fused = nn.Sequential()
-        fused:add(parallel)
-        fused:add(nn.CAddTable())
-    return fused
-end
-
-
-local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, outputLayer)
+local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, singleFeatMap)
     -- There are 2*n_op features that come out of the conv layer
     -- Mask them individually
-    local outputLayer = outputLayer or false
+    local singleFeatMap = singleFeatMap or false
     local n_op = n_op
 
-    --If it is the output layer's masked convolution, then there wil be just one
-    --set of feature maps, since there is no split.
-    if outputLayer == false then n_op = n_op/2 end
+    --If it is the output layer's masked convolution or the 1*1 convolution
+    --on the horizontal stack, then there wil be just one set of feature maps,
+    --since there is no split.
+    if singleFeatMap == false then n_op = n_op/2 end
 
     local endLoop --if it is first channel, we have to include the last layer too
     if firstLayer == true then endLoop = noChannels else endLoop = noChannels-1 end
@@ -91,22 +76,15 @@ local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, out
 
         -- Select the position of the ith pixel in the kernel
         local pixelPos = kW
-
-
-        --Mask
-        --print (weights:size())
-        --print (maskStartOp, maskEndOp, maskStartIp, maskEndIp, pixelPos)
         weights[{ {maskStartOp,maskEndOp}, {maskStartIp,maskEndIp},
                   {}, {pixelPos} }] = 0
 
-        --print (weights[{maskStartOp, maskStartIp}])
-        --print ('\n')
-        ---------------
-        -- If it is not the output layer, mask the next n_op features
-        -- else, just pass
-        ---------------
 
-        if outputLayer == true then ;
+        ---------------
+        -- If we are dealing with a single set of feature maps, just continue
+        -- else, mask the next n_op features
+        ---------------
+        if singleFeatMap == true then ;
         else
             -- This can be done by just shifting the starting and ending positions
             -- of op features by n_op
@@ -119,6 +97,28 @@ local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, out
         end
     end
 end
+
+local function fuse(n_op, factor, ...)
+    local fuseConv
+    local numArgs = select('#',...)
+    if numArgs == 0 then
+        fuseConv = initializeConv(nn.SpatialConvolution, factor*n_op, factor*n_op, 1, 1)
+    else
+        fuseConv = initializeConv(nn.SpatialConvolution_masked, factor*n_op, factor*n_op, 1, 1,
+                                  1, 1, 0, 0, maskChannels, ...)
+    end
+
+    local parallel = nn.ParallelTable()
+        parallel:add(nn.Identity())
+        parallel:add(fuseConv)
+
+    local fused = nn.Sequential()
+        fused:add(parallel)
+        fused:add(nn.CAddTable())
+    return fused
+end
+
+
 
 
 local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
@@ -157,10 +157,6 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
 
     local vStackOut = vConvCropped
         - gatedActivationUnit(n_op)
-
-    -- Try Batch Normalization
-    local vStackOut_bn = vStackOut
-        - nn.SpatialBatchNormalization(n_op)
 
 
     -------------------------------------
@@ -203,17 +199,13 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local hResidualOut
     if isFirstLayer == true then
         hResidualOut = hStackOut
-        --return nn.gModule({vStackIn, hStackIn}, {vStackOut_bn, hResidualOut})
     else
         --Add the residual connections
         hResidualOut = {hStackOut, hStackIn}
-            - fuse(n_op, 1)
+            - fuse(n_op, 1, noChannels, false, true)
     end
 
-    local hResidualOut_bn = hResidualOut
-        - nn.SpatialBatchNormalization(n_op)
-
-    return nn.gModule({vStackIn, hStackIn}, {vStackOut_bn, hResidualOut_bn})
+    return nn.gModule({vStackIn, hStackIn}, {vStackOut, hResidualOut})
 end
 
 
@@ -238,111 +230,57 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
         outputLayer:add(nn.SelectTable(2)) --Select the horizontal stack out
         -- Followed by 2 layers of (ReLU + 1*1 conv of mask B)
         outputLayer:add(nn.ReLU())
+        outputLayer:add(nn.SpatialBatchNormalization(noFeatures))
         outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
                                         noOutputFeatures, 1,1, 1,1,0,0, maskChannels, noChannels, false, true))
         outputLayer:add(nn.ReLU())
+        outputLayer:add(nn.SpatialBatchNormalization(noOutputFeatures))
         outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noOutputFeatures,
                                         noClasses*noChannels, 1,1,1,1,0,0, maskChannels, noChannels, false, true))
 
 
-    --Final SoftMax layer
-    -- After the previous layer, the 4D output is
-    -- BatchSize * (noChannels*noClasses) * N * N
-    -- Break it into chunks of size "BatchSize*noClasses*N*N"
-    -- LogSoftMax by itself will do the spatial log softmax on each chunk
-    local function logSM(index)
-        local model = nn.Sequential()
-            model:add(nn.Narrow(2, (index-1)*noClasses+1, noClasses))
-            model:add(nn.LogSoftMax())
-        return model
-    end
-
-    local split = nn.ConcatTable()
-    for loopSplit = 1, noChannels do
-        split:add(logSM(loopSplit))
-    end
-
 
     local finalOutput = output
         - outputLayer
-        - split
+    -- The 4D output is BatchSize * (noChannels*noClasses) * N * N
 
     local model = nn.gModule({input}, {finalOutput})
     return model
 end
 
 
-function calcLoss(output, target, backward)
-
-    -- Calculate and return E, dE
-    local loss = nn.SpatialClassNLLCriterion()
-    local output = output
-    local target = target
-    local E = {}
-    local avgLoss = 0
-
-    for loopChannels = 1, #output do
-        local currentLoss = loss:forward(nn.SelectTable(loopChannels):forward(output),
-                             nn.SelectTable(loopChannels):forward(target))
-        E[loopChannels] = currentLoss
-        avgLoss = avgLoss + currentLoss
-    end
-    avgLoss = avgLoss / #output
-
---[[
-    local loss1 = nn.ClassNLLCriterion()
-    for loopChannels = 1, #output do
-        local curOut = output[loopChannels]
-        local curTar = target[loopChannels]
-        E[loopChannels] = torch.Tensor(curOut:size(1), curOut:size(3), curOut:size(4))
-        for xx = 1,curOut:size(3) do
-            for yy = 1, curOut:size(4) do
-                local tar = curTar[{{},xx,yy}]
-                local out = curOut[{{},{},xx,yy}]
-                E[loopChannels][{{},xx,yy}] = loss1:forward(out,tar)
-            end
-        end
-    end
-
-    for loopChannels = 1, #output do
-        avgLoss = avgLoss + E[loopChannels]:mean()
-    end
-    avgLoss = avgLoss/#output
-    ]]
-
-    if backward == nil then return E, avgLoss end
-
-    --Else, backward is required
-    local dE_dy = {}
-    for loopChannels = 1, #output do
-        dE_dy[loopChannels] = loss:backward(nn.SelectTable(loopChannels):forward(output),
-                                       nn.SelectTable(loopChannels):forward(target))
-    end
-    return E, dE_dy, avgLoss
+--Final LogSoftMax layer
+local function addSoftMax(noChannels)
+    local outputSoftMax = nn.Sequential()
+        outputSoftMax:add(nn.ReshapeCustom(noChannels))
+        outputSoftMax:add(nn.LogSoftMax())
+    return outputSoftMax
 end
-
 
 -- Optional; to test model
 local function testModel()
     local noChannels = 3
-    model = createModel(noChannels, 12, 5, 256, 7, 3, 15)
+    model = nn.Sequential()
+        model:add(createModel(noChannels, 12, 5, 256, 7, 3, 15))
+        model:add(addSoftMax(noChannels))
     inp = torch.rand(2,noChannels,32,32)
-    target={}
-    for i=1,noChannels do
-        target[i]=torch.Tensor(2,32,32):random(255)
-    end
-
+    target = torch.Tensor(2*noChannels,32,32):random(255)
+    local loss = nn.SpatialClassNLLCriterion()
 
     -- Test model forward
     local function testForward(model, inp)
-        return model:forward(inp)
+        return model:forward(inp);
     end
-    ok, op = pcall(testForward, model, inp)
+    ok,op = pcall(testForward, model, inp)
     if ok then print ('Tested Model Forward') end
 
 
     -- Test Loss
-    ok, e, de = pcall(calcLoss, op, target, true)
+    local function testLoss(output, target)
+        loss:forward(output, target);
+        return loss:backward(output, target);
+    end
+    ok,de = pcall(testLoss, op, target, true)
     if ok then print ('Tested Loss Function') end
 
 
@@ -355,7 +293,7 @@ local function testModel()
 
 
     -- Plot/Save the model to visualize
-    graph.dot(model.fg,'CNN','CNNVerify')
+    --graph.dot((model.modules[1]).fg,'CNN','CNNVerify')
 end
 
 testModel()
@@ -372,13 +310,15 @@ local firstFiltSize = 7  --filter size at input
 local genFiltSize = 3    --filter size of hidden layer
 local noOutputFeatures = 340*noChannels --No of features in the final output layer
 
-model = createModel(noChannels, noFeatures, noLayers, noClasses,
-                    firstFiltSize, genFiltSize, noOutputFeatures)
+model = nn.Sequential()
+    model:add(createModel(noChannels, noFeatures, noLayers, noClasses,
+                          firstFiltSize, genFiltSize, noOutputFeatures))
+    model:add(addSoftMax(noChannels))
 
 print (noChannels, noFeatures, noLayers, noClasses,
                     firstFiltSize, genFiltSize, noOutputFeatures)
 -- return package:
 return {
    model = model,
-   loss = calcLoss,
+   loss = nn.SpatialClassNLLCriterion(),
 }

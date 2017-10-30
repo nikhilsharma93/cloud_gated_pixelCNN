@@ -1,7 +1,3 @@
-------------------------------------------------------------------------------
--- __Author__ = Nikhil Sharma
-------------------------------------------------------------------------------
-
 require 'pl'
 require 'trepl'
 require 'torch'
@@ -26,10 +22,8 @@ opt = lapp[[
       --visualize          (default true)        visualize dataset
 ]]
 
--- nb of threads and fixed seed (for repeatable experiments)
-torch.setnumthreads(opt.threads)
-torch.manualSeed(1)
-torch.setdefaulttensortype('torch.FloatTensor')
+torch.setnumthreads(224)
+torch.setdefaulttensortype('torch.DoubleTensor')
 
 -- type:
 if opt.type == 'cuda' then

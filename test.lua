@@ -5,11 +5,14 @@
 require 'torch'
 require 'xlua'
 require 'optim'
-
+require 'nn'
+require 'nngraph'
+require 'math'
+require 'SpatialConvolution_masked'
+require 'ReshapeCustom'
 ----------------------------------------------------------------------
 print(sys.COLORS.red .. '==> defining some tools')
 
--- model:
 local t = require 'model'
 local model = t.model
 local loss = t.loss
@@ -35,6 +38,7 @@ end
 ----------------------------------------------------------------------
 print(sys.COLORS.red .. '==> defining test procedure')
 
+
 -- test function
 function test(testData)
    model:evaluate()
@@ -42,8 +46,8 @@ function test(testData)
    -- local vars
    local time = sys.clock()
 
-      local nllTest = 0
-      local batchEpochCountTest = 0
+  local nllTest = 0
+  local batchEpochCountTest = 0
    -- test over test data
    print(sys.COLORS.red .. '==> testing on test set:')
    for t = 1,testData:size(),opt.batchSize do
@@ -59,24 +63,22 @@ function test(testData)
       -- create mini batch
       local idx = 1
       for i = t,t+opt.batchSize-1 do
-         x[idx] = trainData.data[i]
-         ytHelper[idx] = trainData.labels[i]
+         x[idx] = testData.data[i]
+         ytHelper[idx] = testData.labels[i]
          idx = idx + 1
       end
 
       -- create yt from ytHelper
-      yt = nn.SplitTable(1,3):forward(ytHelper)
+      local yt
+      yt = nn.ReshapeCustom(testData.labels:size(2)):forward(ytHelper):squeeze(2)
 
 
       -- test sample
       local y = model:forward(x)
-
       local ETest
-      local avgLoss
-      ETest, avgLoss = loss(y,yt)
-      nllTest = nllTest +avgLoss
-
-
+      ETest = loss:forward(y,yt)
+      print ('\nnll: ', ETest, torch.round(torch.max(y)/0.0001)*0.0001, torch.round(torch.min(y)/0.0001)*0.0001)
+      nllTest = nllTest + ETest
    end
 
    -- timing
