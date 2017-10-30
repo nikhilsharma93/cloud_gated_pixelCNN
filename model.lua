@@ -260,11 +260,11 @@ end
 -- Optional; to test model
 local function testModel()
     local noChannels = 3
-    model = nn.Sequential()
+    local model = nn.Sequential()
         model:add(createModel(noChannels, 12, 5, 256, 7, 3, 15))
         model:add(addSoftMax(noChannels))
-    inp = torch.rand(2,noChannels,32,32)
-    target = torch.Tensor(2*noChannels,32,32):random(255)
+    local inp = torch.rand(2,noChannels,32,32)
+    local target = torch.Tensor(2*noChannels,32,32):random(255)
     local loss = nn.SpatialClassNLLCriterion()
 
     -- Test model forward
