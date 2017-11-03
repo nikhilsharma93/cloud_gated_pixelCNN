@@ -300,10 +300,10 @@ local function testModel()
 
 
     -- Test model forward
-    local function testBackward(model, inp, d)
-        model:backward(inp, d);
+    local function testBackward(model, inp, emb, d)
+        model:backward({inp,emb}, d);
     end
-    ok = pcall(testBackward, model, inp, de)
+    ok = pcall(testBackward, model, inp, embedding, de)
     if ok then print ('Tested Model Backward') end
 
 

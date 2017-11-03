@@ -25,7 +25,7 @@ print(sys.COLORS.red ..  '==> allocating minibatch memory')
 
 local x = torch.Tensor(opt.batchSize,testData.data:size(2),
                        testData.data:size(3), testData.data:size(4))
-
+local x_embedding = torch.Tensor(opt.batchSize, testData.embeddingSize)
 local ytHelper = torch.Tensor(opt.batchSize,testData.labels:size(2),
                               testData.labels:size(3), testData.labels:size(4))
 
@@ -64,6 +64,7 @@ function test(testData)
       local idx = 1
       for i = t,t+opt.batchSize-1 do
          x[idx] = testData.data[i]
+         x_embedding[idx] = testData.embeddings[i]
          ytHelper[idx] = testData.labels[i]
          idx = idx + 1
       end
@@ -74,7 +75,7 @@ function test(testData)
 
 
       -- test sample
-      local y = model:forward(x)
+      local y = model:forward({x, x_embedding})
       local ETest
       ETest = loss:forward(y,yt)
       print ('\nnll: ', ETest, torch.round(torch.max(y)/0.0001)*0.0001, torch.round(torch.min(y)/0.0001)*0.0001)

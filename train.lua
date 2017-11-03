@@ -59,13 +59,14 @@ print(sys.COLORS.red ..  '==> allocating minibatch memory')
 
 local x = torch.Tensor(opt.batchSize,trainData.data:size(2),
                        trainData.data:size(3), trainData.data:size(4))
-
+local x_embedding = torch.Tensor(opt.batchSize, trainData.embeddingSize)
 local ytHelper = torch.Tensor(opt.batchSize,trainData.labels:size(2),
                               trainData.labels:size(3), trainData.labels:size(4))
 
 
 if opt.type == 'cuda' then
    x = x:cuda()
+   x_embedding = x_embedding:cuda()
    ytHelper = ytHelper:cuda()
 end
 
@@ -130,6 +131,7 @@ local function train(trainData)
       local idx = 1
       for i = t,t+opt.batchSize-1 do
          x[idx] = trainData.data[shuffle[i]]
+         x_embedding[idx] = trainData.embeddings[shuffle[i]]
          ytHelper[idx] = trainData.labels[shuffle[i]]
          idx = idx + 1
       end
@@ -144,7 +146,7 @@ local function train(trainData)
          dE_dw:zero()
 
          -- evaluate function for complete mini batch
-         local y = model:forward(x)
+         local y = model:forward({x,x_embedding})
 
          -- Save the results to visualize
          -- Optional
@@ -174,7 +176,7 @@ local function train(trainData)
          nll = nll + E
 
          -- backward through the model
-         model:backward(x,dE_dy)
+         model:backward({x,x_embedding},dE_dy)
 
          --clip
          dE_dw:clamp(-2.0, 2.0)
@@ -205,8 +207,9 @@ local function train(trainData)
        local filename = paths.concat(opt.save, 'modelV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.t7')
        os.execute('mkdir -p ' .. sys.dirname(filename))
        print('==> saving model to '..filename)
-       model1 = model:clone()
-       torch.save(filename, model1:clearState())
+       --model1 = model:clone()
+       torch.save(filename, model)
+       --torch.save(filename, model1:clearState())
      else
        print (sys.COLORS.blue .. 'Did Not Save The Model')
      end
