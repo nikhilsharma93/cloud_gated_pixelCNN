@@ -51,7 +51,6 @@ function test(testData)
    -- test over test data
    print(sys.COLORS.red .. '==> testing on test set:')
    for t = 1,testData:size(),opt.batchSize do
-     batchEpochCountTest = batchEpochCountTest + 1
       -- disp progress
       xlua.progress(t, testData:size())
 
@@ -59,6 +58,8 @@ function test(testData)
       if (t + opt.batchSize - 1) > testData:size() then
          break
       end
+
+      batchEpochCountTest = batchEpochCountTest + 1
 
       -- create mini batch
       local idx = 1

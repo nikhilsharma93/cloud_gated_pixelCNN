@@ -103,7 +103,7 @@ local function train(trainData)
      local handle = io.popen("bash readEpochChange.sh")
      local content = handle:read("*a")
      handle:close()
-     if string.sub(content,1,3) == "yes" then
+     if string.find(content,"yes") then
        print (sys.COLORS.blue .. 'Chaning Learning Rate')
        optimState['learningRate'] = optimState['learningRate']/10.0--opt.learningRate/(10^math.floor(epoch/22))
      else
@@ -202,14 +202,12 @@ local function train(trainData)
      local handle = io.popen("bash readEpochChange.sh")
      local content = handle:read("*a")
      handle:close()
-     if string.sub(content,1,3) == "yes" then
+     if string.find(content,"yes") then
        print (sys.COLORS.blue .. 'Saving Model')
        local filename = paths.concat(opt.save, 'modelV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.t7')
        os.execute('mkdir -p ' .. sys.dirname(filename))
        print('==> saving model to '..filename)
-       --model1 = model:clone()
-       torch.save(filename, model)
-       --torch.save(filename, model1:clearState())
+       torch.save(filename, model:clearState())
      else
        print (sys.COLORS.blue .. 'Did Not Save The Model')
      end
