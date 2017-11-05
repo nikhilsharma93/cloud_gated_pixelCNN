@@ -39,9 +39,8 @@ end
 
 local numberTest = #ls(baseFileDir..testName..'/')
 
-numberTrain = 2000 * datasetNum:size()
-numberTest = 500
---print (numberTest)
+numberTrain = 3000 * datasetNum:size() -- using 15k out of 50k training samples
+numberTest = 5000 -- using 5k out of 10k test samples
 local totalNoImages = numberTrain + numberTest
 
 
@@ -63,7 +62,7 @@ for i = 1, datasetNum:size() do
   print ('Loading from dataset '..tostring(i))
   local eachSet = 1
   for imgName in lfs.dir(currentDir) do
-      if eachSet <= 2000 then
+      if eachSet <= 3000 then
   	ok,img=pcall(image.load, currentDir..imgName, 3, 'byte')
     if ok then
       img = img:type('torch.DoubleTensor')
@@ -132,11 +131,13 @@ allLabels = nil
 print(sys.COLORS.red ..  '\nVisualization..' ..sys.COLORS.black .. '\n')
 
 if opt.visualize then
+   -- Showing some training exaples
    local first128Samples = trainData.data[{ {1,128} }]
    image.display{image=first128Samples, nrow=16, legend='Some training examples'}
    local first128Samples = testData.data[{ {1,64} }]
    image.display{image=first128Samples, nrow=16, legend='Some testing examples'}
 end
+
 
 return {
   trainData = trainData,

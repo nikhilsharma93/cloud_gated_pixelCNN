@@ -80,6 +80,7 @@ if not isdir(saveDir) then
 end
 
 
+
 local function train(trainData)
 
    model:training()
@@ -96,13 +97,12 @@ local function train(trainData)
    local shuffle = torch.randperm(trainData:size())
 
 
-   --Ask, after every 'x' epochs, whether the learning rate should be decreased
    if epoch % 1 == 0 then
      print (sys.COLORS.blue..'Change Learning Rate?')
      local handle = io.popen("bash readEpochChange.sh")
      local content = handle:read("*a")
      handle:close()
-     if string.sub(content,1,3) == "yes" then
+     if string.find(content,"yes") then
        print (sys.COLORS.blue .. 'Chaning Learning Rate')
        optimState['learningRate'] = optimState['learningRate']/10.0--opt.learningRate/(10^math.floor(epoch/22))
      else
@@ -138,6 +138,8 @@ local function train(trainData)
       local yt
       yt = nn.ReshapeCustom(trainData.labels:size(2)):forward(ytHelper):squeeze(2)
 
+
+
       -- create closure to evaluate f(X) and df/dX
       local eval_E = function(w)
          -- reset gradients
@@ -146,8 +148,10 @@ local function train(trainData)
          -- evaluate function for complete mini batch
          local y = model:forward(x)
 
+
          -- Save the results to visualize
          -- Optional
+         --if ((epoch % 10 == 0 or epoch <=2 ) and t < 20*opt.batchSize) then
          if (t < 20*opt.batchSize) then
              y1 = y:reshape(opt.batchSize,3*256,32,32)
            for loopPred = 1,opt.batchSize do
@@ -168,6 +172,7 @@ local function train(trainData)
 
          local E
          local dE_dy
+         local avgLoss
          E = loss:forward(y, yt)
          print ('\nnll: ', E, torch.round(torch.max(y)/0.0001)*0.0001, torch.round(torch.min(y)/0.0001)*0.0001)
          dE_dy = loss:backward(y,yt)
@@ -200,13 +205,12 @@ local function train(trainData)
      local handle = io.popen("bash readEpochChange.sh")
      local content = handle:read("*a")
      handle:close()
-     if string.sub(content,1,3) == "yes" then
+     if string.find(content,"yes") then
        print (sys.COLORS.blue .. 'Saving Model')
        local filename = paths.concat(opt.save, 'modelV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.t7')
        os.execute('mkdir -p ' .. sys.dirname(filename))
        print('==> saving model to '..filename)
-       model1 = model:clone()
-       torch.save(filename, model1:clearState())
+       torch.save(filename, model:clearState())
      else
        print (sys.COLORS.blue .. 'Did Not Save The Model')
      end

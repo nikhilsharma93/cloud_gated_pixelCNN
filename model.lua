@@ -40,16 +40,15 @@ local function gatedActivationUnit(n_op)
     return gatedActivation
 end
 
-local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, singleFeatMap)
+local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, outputLayer)
     -- There are 2*n_op features that come out of the conv layer
     -- Mask them individually
-    local singleFeatMap = singleFeatMap or false
+    local outputLayer = outputLayer or false
     local n_op = n_op
 
-    --If it is the output layer's masked convolution or the 1*1 convolution
-    --on the horizontal stack, then there wil be just one set of feature maps,
-    --since there is no split.
-    if singleFeatMap == false then n_op = n_op/2 end
+    --If it is the output layer's masked convolution, then there wil be just one
+    --set of feature maps, since there is no split.
+    if outputLayer == false then n_op = n_op/2 end
 
     local endLoop --if it is first channel, we have to include the last layer too
     if firstLayer == true then endLoop = noChannels else endLoop = noChannels-1 end
@@ -76,15 +75,19 @@ local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, sin
 
         -- Select the position of the ith pixel in the kernel
         local pixelPos = kW
+
+
+        --Mask
+
         weights[{ {maskStartOp,maskEndOp}, {maskStartIp,maskEndIp},
                   {}, {pixelPos} }] = 0
 
+        ---------------
+        -- If it is not the output layer, mask the next n_op features
+        -- else, just pass
+        ---------------
 
-        ---------------
-        -- If we are dealing with a single set of feature maps, just continue
-        -- else, mask the next n_op features
-        ---------------
-        if singleFeatMap == true then ;
+        if outputLayer == true then ;
         else
             -- This can be done by just shifting the starting and ending positions
             -- of op features by n_op
@@ -97,6 +100,8 @@ local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, sin
         end
     end
 end
+
+
 
 local function fuse(n_op, factor, ...)
     local fuseConv
@@ -158,6 +163,10 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local vStackOut = vConvCropped
         - gatedActivationUnit(n_op)
 
+    -- Try Batch Normalization
+    --local vStackOut_bn = vStackOut
+    --    - nn.SpatialBatchNormalization(n_op)
+
 
     -------------------------------------
     --Compute the output horizontal stack
@@ -199,11 +208,15 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local hResidualOut
     if isFirstLayer == true then
         hResidualOut = hStackOut
+        --return nn.gModule({vStackIn, hStackIn}, {vStackOut_bn, hResidualOut})
     else
         --Add the residual connections
         hResidualOut = {hStackOut, hStackIn}
             - fuse(n_op, 1, noChannels, false, true)
     end
+
+    --local hResidualOut_bn = hResidualOut
+    --    - nn.SpatialBatchNormalization(n_op)
 
     return nn.gModule({vStackIn, hStackIn}, {vStackOut, hResidualOut})
 end
@@ -257,11 +270,12 @@ local function addSoftMax(noChannels)
     return outputSoftMax
 end
 
+
 -- Optional; to test model
 local function testModel()
     local noChannels = 3
     local model = nn.Sequential()
-        model:add(createModel(noChannels, 12, 5, 256, 7, 3, 15))
+        model:add(createModel(noChannels, 12, 5, 256, 7, 3, 15, 10))
         model:add(addSoftMax(noChannels))
     local inp = torch.rand(2,noChannels,32,32)
     local target = torch.Tensor(2*noChannels,32,32):random(255)
@@ -291,10 +305,10 @@ local function testModel()
     ok = pcall(testBackward, model, inp, de)
     if ok then print ('Tested Model Backward') end
 
-
     -- Plot/Save the model to visualize
     --graph.dot((model.modules[1]).fg,'CNN','CNNVerify')
 end
+
 
 testModel()
 print ('creating model...')
@@ -313,12 +327,15 @@ local noOutputFeatures = 340*noChannels --No of features in the final output lay
 model = nn.Sequential()
     model:add(createModel(noChannels, noFeatures, noLayers, noClasses,
                           firstFiltSize, genFiltSize, noOutputFeatures))
-    model:add(addSoftMax(noChannels))
+--    model:add(addSoftMax(noChannels))
+    model:add(nn.ReshapeCustom(noChannels))
+    model:add(nn.LogSoftMax())
 
-print (noChannels, noFeatures, noLayers, noClasses,
-                    firstFiltSize, genFiltSize, noOutputFeatures)
+--print (noChannels, noFeatures, noLayers, noClasses,
+--                    firstFiltSize, genFiltSize, noOutputFeatures)
+
 -- return package:
 return {
    model = model,
-   loss = nn.SpatialClassNLLCriterion(),
+   loss = calcLoss,
 }

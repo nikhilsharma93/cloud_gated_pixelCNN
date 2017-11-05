@@ -17,6 +17,7 @@ local t = require 'model'
 local model = t.model
 local loss = t.loss
 
+
 -- Logger:
 local testLogger = optim.Logger(paths.concat(opt.save, 'testV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.log'))
 
@@ -41,17 +42,18 @@ print(sys.COLORS.red .. '==> defining test procedure')
 
 -- test function
 function test(testData)
+
    model:evaluate()
 
    -- local vars
    local time = sys.clock()
 
-  local nllTest = 0
-  local batchEpochCountTest = 0
+   local nllTest = 0
+   local batchEpochCountTest = 0
+
    -- test over test data
    print(sys.COLORS.red .. '==> testing on test set:')
    for t = 1,testData:size(),opt.batchSize do
-     batchEpochCountTest = batchEpochCountTest + 1
       -- disp progress
       xlua.progress(t, testData:size())
 
@@ -59,6 +61,8 @@ function test(testData)
       if (t + opt.batchSize - 1) > testData:size() then
          break
       end
+
+      batchEpochCountTest = batchEpochCountTest + 1
 
       -- create mini batch
       local idx = 1
@@ -76,9 +80,12 @@ function test(testData)
       -- test sample
       local y = model:forward(x)
       local ETest
+      local avgLoss
       ETest = loss:forward(y,yt)
       print ('\nnll: ', ETest, torch.round(torch.max(y)/0.0001)*0.0001, torch.round(torch.min(y)/0.0001)*0.0001)
       nllTest = nllTest + ETest
+
+
    end
 
    -- timing
