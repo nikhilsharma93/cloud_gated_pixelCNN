@@ -9,11 +9,13 @@ require 'nn'
 require 'nngraph'
 require 'math'
 require 'SpatialConvolution_masked'
+require 'ReshapeCustom'
+require 'BiasAddTable'
 local nninit = require 'nninit'
 
 
-local function initializeConv(moduleName, ...)
-    return moduleName(...)--:init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
+local function initializeConv(moduleName, nip, nop, ...)
+    return moduleName(nip, nop, ...):init('weight', nninit.xavier, {dist = 'normal', gain = 1.1})
 end
 
 local function gatedActivationUnit(n_op)
@@ -21,10 +23,12 @@ local function gatedActivationUnit(n_op)
     local tanhBlock = nn.Sequential()
         tanhBlock:add(nn.Narrow(2, 1, n_op))
         tanhBlock:add(nn.Tanh())
+        tanhBlock:add(nn.SpatialBatchNormalization(n_op))
 
     local sigmoidBlock = nn.Sequential()
         sigmoidBlock:add(nn.Narrow(2, n_op+1, n_op))
         sigmoidBlock:add(nn.Sigmoid())
+        sigmoidBlock:add(nn.SpatialBatchNormalization(n_op))
 
     local parallel = nn.ConcatTable(2)
         parallel:add(tanhBlock)
@@ -37,9 +41,73 @@ local function gatedActivationUnit(n_op)
     return gatedActivation
 end
 
+local function maskChannels(weights, n_ip, n_op, kW, noChannels, firstLayer, singleFeatMap)
+    -- There are 2*n_op features that come out of the conv layer
+    -- Mask them individually
+    local singleFeatMap = singleFeatMap or false
+    local n_op = n_op
 
-local function fuse(n_op, factor)
-    local fuseConv = initializeConv(nn.SpatialConvolutionMM, factor*n_op, factor*n_op, 1, 1)
+    --If it is the output layer's masked convolution or the 1*1 convolution
+    --on the horizontal stack, then there wil be just one set of feature maps,
+    --since there is no split.
+    if singleFeatMap == false then n_op = n_op/2 end
+
+    local endLoop --if it is first channel, we have to include the last layer too
+    if firstLayer == true then endLoop = noChannels else endLoop = noChannels-1 end
+
+    for loopChannels = 1, endLoop do
+
+        ---------------
+        --Mask the first n_op features
+        ---------------
+
+        -- Select indices corresponding to op features
+        local maskStartOp = 1 + (loopChannels-1)*(n_op/noChannels)
+        local maskEndOp = loopChannels*(n_op/noChannels)
+
+        -- Select the indices corresponding to ip channels
+        if n_ip % 3 ~= 0 then print ('nip: ',n_ip); os.exit() end
+        local maskStartIp
+        if firstLayer == true then
+            maskStartIp = (n_ip/noChannels)*(loopChannels-1)+1
+        else
+            maskStartIp = (n_ip/noChannels)*(loopChannels)+1
+        end
+        local maskEndIp = n_ip
+
+        -- Select the position of the ith pixel in the kernel
+        local pixelPos = kW
+        weights[{ {maskStartOp,maskEndOp}, {maskStartIp,maskEndIp},
+                  {}, {pixelPos} }] = 0
+
+
+        ---------------
+        -- If we are dealing with a single set of feature maps, just continue
+        -- else, mask the next n_op features
+        ---------------
+        if singleFeatMap == true then ;
+        else
+            -- This can be done by just shifting the starting and ending positions
+            -- of op features by n_op
+            maskStartOp = maskStartOp + n_op
+            maskEndOp = maskEndOp + n_op
+
+            --Mask
+            weights[{ {maskStartOp,maskEndOp}, {maskStartIp,maskEndIp},
+                      {}, {pixelPos} }] = 0
+        end
+    end
+end
+
+local function fuse(n_op, factor, ...)
+    local fuseConv
+    local numArgs = select('#',...)
+    if numArgs == 0 then
+        fuseConv = initializeConv(nn.SpatialConvolution, factor*n_op, factor*n_op, 1, 1)
+    else
+        fuseConv = initializeConv(nn.SpatialConvolution_masked, factor*n_op, factor*n_op, 1, 1,
+                                  1, 1, 0, 0, maskChannels, ...)
+    end
 
     local parallel = nn.ParallelTable()
         parallel:add(nn.Identity())
@@ -52,54 +120,15 @@ local function fuse(n_op, factor)
 end
 
 
-local function maskChannels(weights, n_ip, n_op, kW, noChannels)
-    -- There are 2*n_op features that come out of the conv layer
-    -- Mask them individually
-    local n_op = n_op/2
-    for loopChannels = 1, noChannels-1 do
-
-        ---------------
-        --Mask the first n_op features
-        ---------------
-
-        -- Select indices corresponding to op features
-        local maskStartOp = 1 + (loopChannels-1)*(n_op/noChannels)
-        local maskEndOp = loopChannels*(n_op/noChannels)
-
-        -- Select the indices corresponding to ip channels
-        local maskStartIp = loopChannels+1
-        local maskEndIp = noChannels
-
-        -- Select the position of the ith pixel in the kernel
-        local pixelPos = kW
 
 
-        --Mask
-        weights[{ {maskStartOp,maskEndOp}, {maskStartIp,maskEndIp},
-                  {}, {pixelPos} }] = 0
-
-
-        ---------------
-        --Mask the next n_op features
-        ---------------
-
-        -- This can be done by just shifting the starting and ending positions
-        -- of op features by n_op
-        maskStartOp = maskStartOp + n_op
-        maskEndOp = maskEndOp + n_op
-
-        --Mask
-        weights[{ {maskStartOp,maskEndOp}, {maskStartIp,maskEndIp},
-                  {}, {pixelPos} }] = 0
-    end
-end
-
-
-local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
+local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer,
+                              embedddingSize)
 
     -- Define the previous vertical and horizontal stack
     local vStackIn = - nn.Identity() --make it a nngraph node
     local hStackIn = - nn.Identity() --make it a nngraph node
+    local embedding = - nn.Identity() --make it a nngraph node
 
 
     local noChannels = noChannels --This helps during masking, when it is
@@ -117,7 +146,7 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local padH = math.floor(filtSize/2)
         -- To align with the masking scheme
 
-    local vConv = initializeConv(nn.SpatialConvolutionMM,
+    local vConv = initializeConv(nn.SpatialConvolution,
                                  n_ip, 2*n_op, kernelW, kernelH, 1,1, padW, padH)
 
     -- Note that the op of this layer has extra rows at the bottom, due to padding
@@ -129,9 +158,12 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
         - vConv
         - vCropped
 
-    local vStackOut = vConvCropped
-        - gatedActivationUnit(n_op)
+    local verticalEmbedding = embedding
+        - nn.Linear(embedddingSize, 2*n_op)
 
+    local vStackOut = {vConvCropped, verticalEmbedding}
+        - nn.BiasAddTable()
+        - gatedActivationUnit(n_op)
 
 
     -------------------------------------
@@ -139,13 +171,10 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     -------------------------------------
 
     -- As hinted in the paper, the n*1 masked convolution can be done by
-    -- floor(n/2)*1 kernel with appropriate padding and cropping, if first layer,
-    -- because current pixel should be masked
-    -- ceil(n/2)*1 kernel with appropriate padding and cropping, if other layer
-    if isFirstLayer == true then kernelW = math.floor(filtSize/2)
-    else
-        kernelW = math.ceil(filtSize/2)
-    end
+    -- ceil(n/2)*1 kernel with appropriate masking, padding, and cropping.
+    -- If it is first layer, then the mask type is A
+    -- otherwise it is of type B
+    kernelW = math.ceil(filtSize/2)
     kernelH = 1
     padW = math.floor(filtSize/2)
     -- To align with the masking scheme
@@ -154,56 +183,60 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer)
     local hConv
     local hCropped
 
-    -- If first layer, then ith pixel is already masked by kernel width
-    -- If not, then ith pixel can the ith pixels from previous channels only
-    -- Hence, we have to use a channel mask
     if isFirstLayer == true then
-        hConv = initializeConv(nn.SpatialConvolutionMM,
-                               n_ip, 2*n_op, kernelW, kernelH, 1,1, padW, padH)
-        hCropped = nn.SpatialZeroPadding(0, -n_extraRows, 0, 0)
+        hConv = initializeConv(nn.SpatialConvolution_masked, n_ip, 2*n_op,
+                               kernelW, kernelH, 1,1, padW, padH, maskChannels, noChannels, true)
     else
         hConv = initializeConv(nn.SpatialConvolution_masked, n_ip, 2*n_op,
-                               kernelW, kernelH, 1,1, padW, padH, maskChannels, noChannels)
-        hCropped = nn.SpatialZeroPadding(0, -n_extraRows+1, 0, 0)
+                               kernelW, kernelH, 1,1, padW, padH, maskChannels, noChannels, false)
     end
-
+    hCropped = nn.SpatialZeroPadding(0, -n_extraRows+1, 0, 0)
 
     -- Fuse the hStackIn and 1*1 convolved vStackOut
     local hConvCropped = hStackIn
         - hConv
         - hCropped
 
-    local hStackOut = {hConvCropped, vConvCropped}
+    local horizontalEmbedding = embedding
+        - nn.Linear(embedddingSize, 2*n_op)
+
+    local hFused = {hConvCropped, vConvCropped}
         - fuse(n_op, 2)
+
+    local hStackOut = {hFused, horizontalEmbedding}
+        - nn.BiasAddTable()
         - gatedActivationUnit(n_op)
 
 
     --If this is the first layer, there are no residual connections
+    local hResidualOut
     if isFirstLayer == true then
-        return nn.gModule({vStackIn, hStackIn}, {vStackOut, hStackOut})
+        hResidualOut = hStackOut
     else
         --Add the residual connections
-        local hResidualOut = {hStackOut, hStackIn}
-            - fuse(n_op, 1)
-        return nn.gModule({vStackIn, hStackIn}, {vStackOut, hResidualOut})
+        hResidualOut = {hStackIn, hStackOut}
+            - fuse(n_op, 1, noChannels, false, true)
     end
+
+    return nn.gModule({vStackIn, hStackIn, embedding}, {vStackOut, hResidualOut, embedding})
 end
 
 
-local function createModel(noChannels, noFeatures, noLayers, noClasses,
-                           firstFiltSize, genFiltSize)
+local function createModel(noChannels, noFeatures, noLayers, quantLevels,
+                           firstFiltSize, genFiltSize, noOutputFeatures, embedddingSize)
 
     local input = - nn.Identity()
+    local embedding = - nn.Identity()
 
     local layers = nn.Sequential()
     for loopLayers = 1, noLayers do
         layers:add(gatedPixelUnit(noFeatures, noFeatures, genFiltSize, noChannels,
-                                  false))
+                                  false, embedddingSize))
     end
 
-    local output = {input, nn.Identity()(input)}
+    local output = {input, nn.Copy()(input), embedding}
         - gatedPixelUnit(noChannels, noFeatures, firstFiltSize, noChannels,
-                         true)
+                         true, embedddingSize)
         - layers
 
     --Now the output layer
@@ -211,125 +244,98 @@ local function createModel(noChannels, noFeatures, noLayers, noClasses,
         outputLayer:add(nn.SelectTable(2)) --Select the horizontal stack out
         -- Followed by 2 layers of (ReLU + 1*1 conv of mask B)
         outputLayer:add(nn.ReLU())
+        outputLayer:add(nn.SpatialBatchNormalization(noFeatures))
         outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
-                                        noFeatures, 1,1, 1,1,0,0, maskChannels, noChannels))
+                                        noOutputFeatures, 1,1, 1,1,0,0, maskChannels, noChannels, false, true))
         outputLayer:add(nn.ReLU())
-        outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noFeatures,
-                                        noClasses*noChannels, 1,1,1,1,0,0, maskChannels, noChannels))
+        outputLayer:add(nn.SpatialBatchNormalization(noOutputFeatures))
+        outputLayer:add(initializeConv(nn.SpatialConvolution_masked, noOutputFeatures,
+                                        quantLevels*noChannels, 1,1,1,1,0,0, maskChannels, noChannels, false, true))
 
-
-    --Final SoftMax / Sigmoid layer
-    -- After the previous layer, the 4D output is
-    -- BatchSize * (noChannels*noClasses) * N * N
-    -- Break it into chunks of size "BatchSize*noChannels*N*N"
-    -- LogSoftMax by itself will do the spatial log softmax on each chunk
-    local function logSM(index)
-        local model = nn.Sequential()
-            model:add(nn.Narrow(2, (index-1)*noClasses+1, noClasses))
-            model:add(nn.LogSoftMax())
-        return model
-    end
-
-    local split = nn.ConcatTable()
-    for loopSplit = 1, noChannels do
-        split:add(logSM(loopSplit))
-    end
 
 
     local finalOutput = output
         - outputLayer
-        - split
+    -- The 4D output is BatchSize * (noChannels*quantLevels) * N * N
 
-    local model = nn.gModule({input}, {finalOutput})
+    local model = nn.gModule({input, embedding}, {finalOutput})
     return model
 end
 
 
-function calcLoss(output, target, backward)
-
-    -- Calculate and return E, dE
-    local loss = nn.SpatialClassNLLCriterion()
-    local output = output
-    local target = target
-    local E = {}
-    local avgLoss = 0
-
-    for loopChannels = 1, #output do
-        local currentLoss = loss:forward(nn.SelectTable(loopChannels):forward(output),
-                             nn.SelectTable(loopChannels):forward(target))
-        E[loopChannels] = currentLoss
-        avgLoss = avgLoss + currentLoss
-    end
-    avgLoss = avgLoss / #output
-
-    if backward == nil then return E, avgLoss end
-
-    --Else, backward is required
-    local dE_dy = {}
-    for loopChannels = 1, #output do
-        dE_dy[loopChannels] = loss:backward(nn.SelectTable(loopChannels):forward(output),
-                                       nn.SelectTable(loopChannels):forward(target))
-    end
-
-    return E, dE_dy, avgLoss
+--Final LogSoftMax layer
+local function addSoftMax(noChannels)
+    local outputSoftMax = nn.Sequential()
+        outputSoftMax:add(nn.ReshapeCustom(noChannels))
+        outputSoftMax:add(nn.LogSoftMax())
+    return outputSoftMax
 end
-
 
 -- Optional; to test model
 local function testModel()
     local noChannels = 3
-    model = createModel(noChannels, 12, 5, 256, 7, 3)
-    inp = torch.rand(2,noChannels,32,32)
-    target={}
-    for i=1,noChannels do
-        target[i]=torch.Tensor(2,32,32):random(255)
-    end
-
+    local model = nn.Sequential()
+        model:add(createModel(noChannels, 12, 5, 256, 7, 3, 15, 10))
+        model:add(addSoftMax(noChannels))
+    local inp = torch.rand(2,noChannels,32,32)
+    local embedding = torch.Tensor(2,10):rand(2,10)
+    local target = torch.Tensor(2*noChannels,32,32):random(255)
+    local loss = nn.SpatialClassNLLCriterion()
 
     -- Test model forward
-    local function testForward(model, inp)
-        return model:forward(inp)
+    local function testForward(model, inp, emb)
+        return model:forward({inp,emb});
     end
-    ok, op = pcall(testForward, model, inp)
+    ok,op = pcall(testForward, model, inp, embedding)
     if ok then print ('Tested Model Forward') end
 
 
     -- Test Loss
-    ok, e, de = pcall(calcLoss, op, target, true)
+    local function testLoss(output, target)
+        loss:forward(output, target);
+        return loss:backward(output, target);
+    end
+    ok,de = pcall(testLoss, op, target, true)
     if ok then print ('Tested Loss Function') end
 
 
     -- Test model forward
-    local function testBackward(model, inp, d)
-        model:backward(inp, d);
+    local function testBackward(model, inp, emb, d)
+        model:backward({inp,emb}, d);
     end
-    ok = pcall(testBackward, model, inp, de)
+    ok = pcall(testBackward, model, inp, embedding, de)
     if ok then print ('Tested Model Backward') end
 
 
     -- Plot/Save the model to visualize
-    graph.dot(model.fg,'CNN','CNNVerify')
+    --graph.dot((model.modules[1]).fg,'CNN','CNNVerify')
 end
 
 testModel()
 
+print ('creating model...')
 
 ---------------------------------------------------------
 -- Create a model and return it
 ---------------------------------------------------------
 local noChannels = 3     --No of input channels
-local noFeatures = 128    --Hidden layer features
-local noLayers = 15      --No of hidden layers
-local noClasses = 256    --8-bit image, 1 to 256 values
+local noFeatures = 42*noChannels    --Hidden layer features
+local noLayers = 12        --No of hidden layers
+local quantLevels = 256    --8-bit image, 1 to 256 values
 local firstFiltSize = 7  --filter size at input
 local genFiltSize = 3    --filter size of hidden layer
+local noOutputFeatures = 340*noChannels --No of features in the final output layer
+local embedddingSize = 10  --length of one-hot encoding across different classes
 
-model = createModel(noChannels, noFeatures, noLayers, noClasses,
-                    firstFiltSize, genFiltSize)
+model = nn.Sequential()
+    model:add(createModel(noChannels, noFeatures, noLayers, quantLevels,
+                          firstFiltSize, genFiltSize, noOutputFeatures, embedddingSize))
+    model:add(addSoftMax(noChannels))
 
-
+print (noChannels, noFeatures, noLayers, quantLevels,
+                    firstFiltSize, genFiltSize, noOutputFeatures, embedddingSize)
 -- return package:
 return {
    model = model,
-   loss = calcLoss,
+   loss = nn.SpatialClassNLLCriterion(),
 }

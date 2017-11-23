@@ -5,24 +5,27 @@
 require 'torch'
 require 'xlua'
 require 'optim'
-
+require 'nn'
+require 'nngraph'
+require 'math'
+require 'SpatialConvolution_masked'
+require 'ReshapeCustom'
 ----------------------------------------------------------------------
 print(sys.COLORS.red .. '==> defining some tools')
 
--- model:
 local t = require 'model'
 local model = t.model
 local loss = t.loss
 
 -- Logger:
-local testLogger = optim.Logger(paths.concat(opt.save, 'testV1.log'))
+local testLogger = optim.Logger(paths.concat(opt.save, 'testV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'.log'))
 
 ----------------------------------------------------------------------
 print(sys.COLORS.red ..  '==> allocating minibatch memory')
 
 local x = torch.Tensor(opt.batchSize,testData.data:size(2),
                        testData.data:size(3), testData.data:size(4))
-
+local x_embedding = torch.Tensor(opt.batchSize, testData.embeddingSize)
 local ytHelper = torch.Tensor(opt.batchSize,testData.labels:size(2),
                               testData.labels:size(3), testData.labels:size(4))
 
@@ -35,6 +38,7 @@ end
 ----------------------------------------------------------------------
 print(sys.COLORS.red .. '==> defining test procedure')
 
+
 -- test function
 function test(testData)
    model:evaluate()
@@ -42,12 +46,11 @@ function test(testData)
    -- local vars
    local time = sys.clock()
 
-      local nllTest = 0
-      local batchEpochCountTest = 0
+  local nllTest = 0
+  local batchEpochCountTest = 0
    -- test over test data
    print(sys.COLORS.red .. '==> testing on test set:')
    for t = 1,testData:size(),opt.batchSize do
-     batchEpochCountTest = batchEpochCountTest + 1
       -- disp progress
       xlua.progress(t, testData:size())
 
@@ -56,27 +59,28 @@ function test(testData)
          break
       end
 
+      batchEpochCountTest = batchEpochCountTest + 1
+
       -- create mini batch
       local idx = 1
       for i = t,t+opt.batchSize-1 do
-         x[idx] = trainData.data[i]
-         ytHelper[idx] = trainData.labels[i]
+         x[idx] = testData.data[i]
+         x_embedding[idx] = testData.embeddings[i]
+         ytHelper[idx] = testData.labels[i]
          idx = idx + 1
       end
 
       -- create yt from ytHelper
-      yt = nn.SplitTable(1,3):forward(ytHelper)
+      local yt
+      yt = nn.ReshapeCustom(testData.labels:size(2)):forward(ytHelper):squeeze(2)
 
 
       -- test sample
-      local y = model:forward(x)
-
+      local y = model:forward({x, x_embedding})
       local ETest
-      local avgLoss
-      ETest, avgLoss = loss(y,yt)
-      nllTest = nllTest +avgLoss
-
-
+      ETest = loss:forward(y,yt)
+      print ('\nnll: ', ETest, torch.round(torch.max(y)/0.0001)*0.0001, torch.round(torch.min(y)/0.0001)*0.0001)
+      nllTest = nllTest + ETest
    end
 
    -- timing

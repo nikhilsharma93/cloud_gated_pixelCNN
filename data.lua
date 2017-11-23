@@ -38,15 +38,20 @@ for i = 1, datasetNum:size() do
 end
 
 local numberTest = #ls(baseFileDir..testName..'/')
-
+local eachSetMax = 4000
+numberTrain = eachSetMax * datasetNum:size()
+numberTest = 500
+--print (numberTest)
 local totalNoImages = numberTrain + numberTest
-
+local embeddingSize = 10 -- equal to the number of classes
 
 windowX = 32
 windowY = 32
 
 local allImages = torch.Tensor(totalNoImages, 3, windowY, windowX)
 local allLabels = torch.Tensor(totalNoImages, 3, windowY, windowX)
+local allEmbeddings = torch.zeros(totalNoImages, embeddingSize)
+
 
 
 --Loading the Training Images
@@ -56,31 +61,54 @@ local loopVar1 = 0
 
 --Training Data
 for i = 1, datasetNum:size() do
+  local takenIdxs_train = torch.zeros(10)
   local currentDir = baseFileDir..'data_batch_'..tostring(datasetNum[i])..'/'
   print ('Loading from dataset '..tostring(i))
+  local eachSet = 1
   for imgName in lfs.dir(currentDir) do
-  	ok,img=pcall(image.load, currentDir..imgName, 3,'byte')
-    if ok then
-      allImages[loopVar1+1] = img:clone()
-      allLabels[loopVar1+1] = img:type('torch.DoubleTensor') + 1
-      loopVar1 = loopVar1 + 1
+      if (string.find(imgName, '.png')) then
+          local name = tonumber(string.sub(imgName,7,7)) + 1
+          if (eachSet <= eachSetMax and takenIdxs_train[name]<eachSetMax/10) then
+          	ok,img=pcall(image.load, currentDir..imgName, 3, 'byte')
+            if ok then
+              --imgName starts with Label_i_, <i> represents label class
+              takenIdxs_train[name] = takenIdxs_train[name] + 1
+              img = img:type('torch.DoubleTensor')
+              allLabels[loopVar1+1] = img:clone() + 1
+              allImages[loopVar1+1] = (img - 127.5)/127.5
+              --Add embedding:
+              allEmbeddings[{loopVar1+1,name}] = 1
+              loopVar1 = loopVar1 + 1
+              eachSet = eachSet+1
+            end
+        end
     end
   end
+  print (takenIdxs_train)
 end
 print ('Loaded training data: '..tostring(loopVar1))
 
 --Testing Data
 local testDir = baseFileDir..testName..'/'
+local takenIdxs_test = torch.zeros(10)
 for imgName in lfs.dir(testDir) do
-  ok,img=pcall(image.load, testDir..imgName, 3,'byte')
-  if ok then
-    allImages[loopVar1+1] = img:clone()
-    allLabels[loopVar1+1] = img:type('torch.DoubleTensor') + 1
-    loopVar1 = loopVar1 + 1
+    if (string.find(imgName,'.png')) then
+        local name = tonumber(string.sub(imgName,7,7)) + 1
+        if (loopVar1 < totalNoImages and takenIdxs_test[name]<numberTest/10) then
+          ok,img=pcall(image.load, testDir..imgName, 3, 'byte')
+          if ok then
+              takenIdxs_test[name] = takenIdxs_test[name] + 1
+              img = img:type('torch.DoubleTensor')
+              allLabels[loopVar1+1] = img:clone() + 1
+              allImages[loopVar1+1] = (img - 127.5)/127.5
+              allEmbeddings[{loopVar1+1,name}] = 1
+              loopVar1 = loopVar1 + 1
+          end
+      end
   end
 end
+print (takenIdxs_test)
 print ('Loaded testing data: '..tostring(loopVar1))
-
 
 ----------------------------------------------------------------------
 --Data shuffling
@@ -91,14 +119,18 @@ local labelsShuffleTest = torch.randperm(numberTest)
 -- create train set:
 trainData = {
    data = torch.Tensor(numberTrain, 3, windowY, windowX),
+   embeddings = torch.zeros(numberTrain, embeddingSize),
    labels = torch.Tensor(numberTrain, 3, windowY, windowX),
+   embeddingSize = embeddingSize,
    size = function() return numberTrain end,
-   saveDir = currentDir..'/results/imagesV1/'
+   saveDir = currentDir..'/'..opt.save..'/imagesV_B'..tostring(opt.batchSize)..'_M'..tostring(opt.momentum)..'/'
 }
 --create test set:
 testData = {
-    data = torch.Tensor(numberTrain, 3, windowY, windowX),
-    labels = torch.Tensor(numberTrain, 3, windowY, windowX),
+    data = torch.Tensor(numberTest, 3, windowY, windowX),
+    embeddings = torch.zeros(numberTest, embeddingSize),
+    embeddingSize = embeddingSize,
+    labels = torch.Tensor(numberTest, 3, windowY, windowX),
     size = function() return numberTest end
 }
 
@@ -106,10 +138,12 @@ testData = {
 for i=1,numberTrain do
    trainData.data[i] = allImages[labelsShuffleTrain[i]]:clone()
    trainData.labels[i] = allLabels[labelsShuffleTrain[i]]:clone()
+   trainData.embeddings[i] = allEmbeddings[labelsShuffleTrain[i]]:clone()
 end
 for i=1,numberTest do
    testData.data[i] = allImages[labelsShuffleTest[i]+numberTrain]:clone()
    testData.labels[i] = allLabels[labelsShuffleTest[i]+numberTrain]:clone()
+   testData.embeddings[i] = allEmbeddings[labelsShuffleTest[i]+numberTrain]:clone()
 end
 
 
@@ -117,73 +151,17 @@ end
 allImages = nil
 allLabels = nil
 
-
-----------------------------------------------------------------------
-print(sys.COLORS.red ..  'Preprocessing the data..' .. sys.COLORS.black ..'\n')
-local channels = {'r','g','b'}
-
-print ('Global Normalization\n')
-local mean = {}
-local std = {}
-for i,channel in ipairs(channels) do
-   -- normalize each channel globally:
-   mean[i] = trainData.data[{ {},i,{},{} }]:mean()
-   std[i] = trainData.data[{ {},i,{},{} }]:std()
-   trainData.data[{ {},i,{},{} }]:add(-mean[i])
-   trainData.data[{ {},i,{},{} }]:div(std[i])
-end
-print (mean)
-print (std)
--- Normalize test data, using the training means/stds
-for i,channel in ipairs(channels) do
-   -- normalize each channel globally:
-   testData.data[{ {},i,{},{} }]:add(-mean[i])
-   testData.data[{ {},i,{},{} }]:div(std[i])
-end
-
-
-----------------------------------------------------------------------
-print(sys.COLORS.red ..  '\nVerify Statistics:' ..sys.COLORS.black .. '\n')
-
-
-for i,channel in ipairs(channels) do
-   local trainMean = trainData.data[{ {},i }]:mean()
-   local trainStd = trainData.data[{ {},i }]:std()
-
-   local testMean = testData.data[{ {},i }]:mean()
-   local testStd = testData.data[{ {},i }]:std()
-
-   print('       training data, '..channel..'-channel, mean:               ' .. trainMean)
-   print('       training data, '..channel..'-channel, standard deviation: ' .. trainStd)
-
-   print('       test data, '..channel..'-channel, mean:                   ' .. testMean)
-   print('       test data, '..channel..'-channel, standard deviation:     ' .. testStd)
-end
-
 ----------------------------------------------------------------------
 print(sys.COLORS.red ..  '\nVisualization..' ..sys.COLORS.black .. '\n')
 
--- Visualization is quite easy, using image.display(). Check out:
--- help(image.display), for more info about options.
-
-if false then --opt.visualize then
-   -- Showing some training exaples
+if opt.visualize then
    local first128Samples = trainData.data[{ {1,128} }]
    image.display{image=first128Samples, nrow=16, legend='Some training examples'}
-   --image.save('/home/nikhil/myCode/learning/Torch/AI2/model3-PreTrained-ExtraImg/trainImages.jpg', first128Samples)
-   -- Showing some testing exaples
-   local first128Samples = testData.data[{ {1,16} }]
+   local first128Samples = testData.data[{ {1,64} }]
    image.display{image=first128Samples, nrow=16, legend='Some testing examples'}
-   --image.save('/home/nikhil/myCode/learning/Torch/AI2/model3-PreTrained-ExtraImg/testImages.jpg', first128Samples)
-   local first128Samples = trainData.labels[{ {1,128} }]:reshape(128,outputSize,outputSize)
-   --print (first128Samples:size())
-   image.display{image=first128Samples, nrow=16, legend='Some traininglabels'}
 end
-
 
 return {
   trainData = trainData,
   testData = testData,
-  mean = mean,
-  std = std
 }
