@@ -214,7 +214,7 @@ local function gatedPixelUnit(n_ip, n_op, filtSize, noChannels, isFirstLayer,
         hResidualOut = hStackOut
     else
         --Add the residual connections
-        hResidualOut = {hStackOut, hStackIn}
+        hResidualOut = {hStackIn, hStackOut}
             - fuse(n_op, 1, noChannels, false, true)
     end
 
